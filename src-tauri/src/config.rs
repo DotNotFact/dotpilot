@@ -73,6 +73,15 @@ pub struct Config {
     pub ai_proxy: String,
     pub ai_effort: String,
     pub poll_ms: u64,
+    /// Токен бота Telegram для уведомлений. Пусто — уведомления не отправляются.
+    #[serde(default)]
+    pub telegram_bot_token: String,
+    /// Идентификатор чата, куда слать уведомления.
+    #[serde(default)]
+    pub telegram_chat_id: String,
+    /// Отправлять ли уведомления о проблемах.
+    #[serde(default)]
+    pub notify_enabled: bool,
     /// Приостанавливать запись в железо, пока работает античит.
     #[serde(default)]
     pub anticheat_safe_mode: bool,
@@ -200,6 +209,9 @@ impl Default for Config {
             poll_ms: 3000,
             power_tariff: default_tariff(),
             anticheat_safe_mode: false,
+            telegram_bot_token: String::new(),
+            telegram_chat_id: String::new(),
+            notify_enabled: false,
             tg_exe: "D:\\Application\\Telegram Desktop\\Telegram.exe".into(),
             tgws_exe: "D:\\DotNotFact\\Desktop\\TgWsProxy_windows.exe".into(),
             tgws_autostart: false,

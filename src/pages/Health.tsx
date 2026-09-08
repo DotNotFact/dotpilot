@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { Section, Tile, Tag, Markdown } from "../components/ui";
+import { save } from "@tauri-apps/plugin-dialog";
+import { Section, Tile, Tag, Markdown, StatusPill, Switch } from "../components/ui";
 import { useStore } from "../store";
-import { api, timeHM, type HealthReport, type Finding, type Severity, type TrendReport } from "../lib/api";
+import { api, timeHM, type HealthReport, type Finding, type Severity, type TrendReport, type MaintenanceTask } from "../lib/api";
 
 const SEVERITY: Record<Severity, { label: string; color: string; order: number }> = {
   problem: { label: "требует внимания", color: "var(--color-coral)", order: 0 },
@@ -42,8 +43,24 @@ export default function Health() {
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [trends, setTrends] = useState<TrendReport | null>(null);
+  const [tasks, setTasks] = useState<MaintenanceTask[]>([]);
   const cfg = useStore((s) => s.cfg);
   const saveConfig = useStore((s) => s.saveConfig);
+
+  const saveReport = async () => {
+    const stamp = new Date().toISOString().slice(0, 10);
+    const path = await save({ defaultPath: `Состояние-ПК-${stamp}.html`, filters: [{ name: "HTML", extensions: ["html"] }] });
+    if (!path) return;
+    setBusy("Собираю отчёт…");
+    try {
+      await api.hardwareReport(path);
+      setMsgOk(`Отчёт сохранён: ${path}. Откройте его в браузере и напечатайте в PDF, если нужен файл для передачи.`);
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const check = async () => {
     setBusy("Идёт проверка: датчики, диски, журнал аппаратных ошибок…");
@@ -71,9 +88,12 @@ export default function Health() {
     }
   };
 
+  const [msgOk, setMsgOk] = useState<string | null>(null);
+
   useEffect(() => {
     check();
     api.trendsReport().then(setTrends).catch(() => setTrends(null));
+    api.maintenanceState().then(setTasks).catch(() => setTasks([]));
   }, []);
 
   const sorted = report ? [...report.findings].sort((a, b) => SEVERITY[a.severity].order - SEVERITY[b.severity].order) : [];
@@ -206,6 +226,99 @@ export default function Health() {
               <div className="text-[11.5px] text-ink-3 mt-1.5">{trends.energy.note}</div>
             </div>
           </div>
+        </Section>
+      )}
+
+      {tasks.length > 0 && (
+        <Section
+          title="Обслуживание"
+          sub="Тяжёлые проверки не запускаются сами: решать, когда это уместно, должен человек. Планировщик только напоминает."
+          right={
+            <button className="btn" disabled={!!busy} onClick={saveReport}>
+              Отчёт о состоянии
+            </button>
+          }
+        >
+          <div className="flex flex-col gap-1.5">
+            {tasks.map((t) => (
+              <div key={t.id} className="flex items-start gap-2.5 py-1.5">
+                <StatusPill ok={!t.due} warn={t.due} text={t.due ? "пора" : "сделано"} />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13px]">
+                    {t.name}
+                    <span className="text-ink-3"> · раз в {t.every_days} дн.</span>
+                    {!t.automatic && <span className="text-ink-3"> · вручную</span>}
+                  </div>
+                  <div className="text-[11.5px] text-ink-2 mt-0.5">{t.why}</div>
+                  <div className="text-[11.5px] text-ink-3 mt-0.5">
+                    {t.days_since != null ? `Последний раз ${t.days_since.toFixed(0)} дн. назад` : "Ни разу не отмечалось"} · {t.where_to}
+                  </div>
+                </div>
+                <button
+                  className="btn shrink-0"
+                  disabled={!!busy}
+                  onClick={() => api.maintenanceDone(t.id).then(setTasks).catch((e) => setErr(String(e)))}
+                >
+                  Отметить
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div className="panel-2 px-3.5 py-3 mt-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-[13px]">Уведомления в Telegram</div>
+              <Switch
+                on={cfg?.notify_enabled ?? false}
+                disabled={!cfg?.telegram_bot_token || !cfg?.telegram_chat_id}
+                onChange={(v) => cfg && saveConfig({ ...cfg, notify_enabled: v })}
+              />
+            </div>
+            <div className="text-[11.5px] text-ink-2 mt-1">
+              Отправляются только сообщения о том, что требует внимания: найденные проблемы в проверке состояния, откат
+              разгона и восстановление после сбоя. Замечания и обычные показания не отправляются, иначе уведомления
+              быстро научатся игнорировать.
+            </div>
+            <div className="text-[11.5px] text-ink-3 mt-1">
+              Приложение не собирает телеметрию и никуда её не отправляет помимо этого. Токен хранится в файле
+              настроек рядом с программой в открытом виде.
+            </div>
+            <div className="flex items-end gap-2 mt-2.5">
+              <div className="flex-1">
+                <div className="eyebrow">Токен бота</div>
+                <input
+                  className="input num w-full mt-1"
+                  type="password"
+                  placeholder="123456:AA…"
+                  value={cfg?.telegram_bot_token ?? ""}
+                  onChange={(e) => cfg && saveConfig({ ...cfg, telegram_bot_token: e.target.value })}
+                />
+              </div>
+              <div className="w-44">
+                <div className="eyebrow">Чат</div>
+                <input
+                  className="input num w-full mt-1"
+                  placeholder="123456789"
+                  value={cfg?.telegram_chat_id ?? ""}
+                  onChange={(e) => cfg && saveConfig({ ...cfg, telegram_chat_id: e.target.value })}
+                />
+              </div>
+              <button
+                className="btn"
+                disabled={!!busy || !cfg?.telegram_bot_token || !cfg?.telegram_chat_id}
+                onClick={() =>
+                  api
+                    .notifyTest()
+                    .then((r) => setMsgOk(r.detail))
+                    .catch((e) => setErr(String(e)))
+                }
+              >
+                Проверить связь
+              </button>
+            </div>
+          </div>
+
+          {msgOk && <div className="text-[12.5px] text-mint mt-2">{msgOk}</div>}
         </Section>
       )}
 

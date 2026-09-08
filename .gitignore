@@ -7,10 +7,11 @@ src-tauri/gen/schemas
 # собранный портативный бинарник — весит 9 МБ, собирается из исходников
 DotPilot.exe
 
-# локальное состояние: конфиг хранит API-ключ Anthropic в открытом виде
+# локальное состояние: конфиг хранит API-ключ Anthropic и токен бота в открытом виде
 DotPilot.config.json
 DotPilot.oc.json
 DotPilot.baselines.json
 DotPilot.trends.json
+DotPilot.maintenance.json
 *.json.tmp
 

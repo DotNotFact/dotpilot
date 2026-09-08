@@ -53,6 +53,14 @@ export interface Config {
   ai_proxy: string;
   ai_effort: string;
   poll_ms: number;
+  /** Токен бота Telegram для уведомлений. */
+  telegram_bot_token: string;
+  /** Идентификатор чата для уведомлений. */
+  telegram_chat_id: string;
+  /** Отправлять ли уведомления о проблемах. */
+  notify_enabled: boolean;
+  /** Приостанавливать запись в железо, пока работает античит. */
+  anticheat_safe_mode: boolean;
   /** Цена киловатт-часа для подсчёта стоимости энергии. */
   power_tariff: number;
   tg_exe: string;
@@ -695,7 +703,30 @@ export interface AntiCheatStatus {
   note: string;
 }
 
+/** Обслуживание: что и когда пора делать. */
+export interface MaintenanceTask {
+  id: string;
+  name: string;
+  every_days: number;
+  last_run: number | null;
+  days_since: number | null;
+  due: boolean;
+  /** Может ли приложение выполнить задачу само. */
+  automatic: boolean;
+  why: string;
+  where_to: string;
+}
+
+export interface NotifyResult {
+  sent: boolean;
+  detail: string;
+}
+
 export const api = {
+  maintenanceState: () => invoke<MaintenanceTask[]>("maintenance_state"),
+  maintenanceDone: (id: string) => invoke<MaintenanceTask[]>("maintenance_done", { id }),
+  notifyTest: () => invoke<NotifyResult>("notify_test"),
+  hardwareReport: (path?: string) => invoke<string>("hardware_report", { path: path ?? null }),
   anticheatStatus: () => invoke<AntiCheatStatus>("anticheat_status"),
   anticheatSetMode: (on: boolean) => invoke<void>("anticheat_set_mode", { on }),
   trendsReport: () => invoke<TrendReport>("trends_report"),

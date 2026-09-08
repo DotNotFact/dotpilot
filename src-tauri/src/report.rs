@@ -225,3 +225,148 @@ pub fn build(st: &AppState) -> String {
     md.push_str(&format!("\n_Отчёт создан DotPilot {}; собственная нагрузка приложения {:.1}% CPU, {} МБ._\n", td(snap.ts), snap.self_stats.cpu_total_pct, snap.self_stats.mem_mb + snap.self_stats.webview_mem_mb));
     md
 }
+
+// --- отчёт о состоянии железа ----------------------------------------------
+
+/// Экранирование для вставки в HTML: имена дисков и моделей приходят из системы,
+/// и в них теоретически может оказаться угловая скобка.
+fn esc(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
+/// Самодостаточный HTML-отчёт о состоянии железа.
+///
+/// Задуман для продажи или передачи техники: покупателю нужно доказательство,
+/// продавцу — обоснование цены. Файл не тянет ничего извне, поэтому открывается
+/// на любой машине и печатается в PDF средствами браузера.
+///
+/// Отчёт намеренно не называет себя сертификатом: это снимок показаний машины
+/// в конкретный момент, снятый программой, которую запускал сам владелец.
+pub fn hardware_html(cpu_load: f32) -> String {
+    let fw = crate::platform::firmware_info();
+    let mem = crate::platform::memory_config();
+    let gpu = crate::nvapi::telemetry();
+    let health = crate::health::check(cpu_load);
+    let now = chrono::Local::now().format("%d.%m.%Y %H:%M").to_string();
+
+    let mut findings = String::new();
+    for f in &health.findings {
+        let (label, color) = match f.severity {
+            crate::health::Severity::Problem => ("требует внимания", "#c0392b"),
+            crate::health::Severity::Warning => ("можно улучшить", "#b7791f"),
+            crate::health::Severity::Notice => ("к сведению", "#2b6cb0"),
+            crate::health::Severity::Ok => ("в норме", "#276749"),
+        };
+        findings.push_str(&format!(
+            "<tr><td style=\"white-space:nowrap\"><span class=\"tag\" style=\"background:{color}\">{label}</span></td>\
+             <td><b>{}</b> — {}<div class=\"muted\">{}</div></td><td>{}</td></tr>",
+            esc(&f.area),
+            esc(&f.title),
+            esc(&f.reference),
+            esc(&f.measured)
+        ));
+    }
+
+    let mem_rows: String = mem
+        .modules
+        .iter()
+        .map(|m| {
+            format!(
+                "<tr><td>{}</td><td>{:.0} ГБ</td><td>{} МТ/с</td><td>{:.3} В</td></tr>",
+                esc(&m.bank),
+                m.capacity_gb,
+                m.configured_mts,
+                m.configured_mv as f32 / 1000.0
+            )
+        })
+        .collect();
+
+    let gpu_row = match &gpu {
+        Some(g) => format!(
+            "<tr><th>Видеокарта</th><td>{} · сейчас {} °C · лимит мощности {:.0} % от штатного</td></tr>",
+            esc(&g.name),
+            g.temperatures.iter().find(|t| t.target == "gpu").map(|t| t.current_c).unwrap_or(0),
+            g.power_current_percent.unwrap_or(100.0)
+        ),
+        None => "<tr><th>Видеокарта</th><td>NVIDIA не обнаружена</td></tr>".to_string(),
+    };
+
+    format!(
+        r#"<!doctype html>
+<html lang="ru"><head><meta charset="utf-8">
+<title>Состояние ПК — {now}</title>
+<style>
+ body {{ font: 13px/1.55 "Segoe UI", system-ui, sans-serif; color:#1a202c; max-width:900px; margin:24px auto; padding:0 20px; }}
+ h1 {{ font-size:22px; margin:0 0 4px; }}
+ h2 {{ font-size:15px; margin:24px 0 8px; border-bottom:1px solid #e2e8f0; padding-bottom:4px; }}
+ table {{ border-collapse:collapse; width:100%; }}
+ td, th {{ border-bottom:1px solid #edf2f7; padding:6px 8px; text-align:left; vertical-align:top; }}
+ th {{ width:180px; color:#4a5568; font-weight:600; }}
+ .muted {{ color:#718096; font-size:11.5px; margin-top:2px; }}
+ .tag {{ color:#fff; border-radius:3px; padding:1px 6px; font-size:11px; }}
+ .note {{ background:#f7fafc; border-left:3px solid #cbd5e0; padding:10px 12px; color:#4a5568; font-size:12px; margin-top:20px; }}
+ @media print {{ body {{ margin:0; }} h2 {{ page-break-after:avoid; }} tr {{ page-break-inside:avoid; }} }}
+</style></head><body>
+<h1>Состояние ПК</h1>
+<div class="muted">Снято {now} · {summary}</div>
+
+<h2>Состав</h2>
+<table>
+<tr><th>Процессор</th><td>{cpu} — {cores} ядер / {threads} потоков</td></tr>
+{gpu_row}
+<tr><th>Плата</th><td>{board}</td></tr>
+<tr><th>Прошивка</th><td>{bios_vendor} {bios_version} от {bios_date}</td></tr>
+<tr><th>Память</th><td>{mem_total:.0} ГБ · профиль {profile}</td></tr>
+</table>
+
+<h2>Модули памяти</h2>
+<table><tr><th>Слот</th><th>Объём</th><th>Частота</th><th>Напряжение</th></tr>{mem_rows}</table>
+
+<h2>Проверка состояния</h2>
+<table>{findings}</table>
+
+<div class="note">
+Это снимок показаний машины на указанный момент, снятый приложением DotPilot, а не сертификат
+и не результат независимой экспертизы. Данные о накопителях взяты из SMART, сведения об
+аппаратных ошибках — из журнала Windows за последние 30 дней. Проверить их может любой
+покупатель на этой же машине.
+</div>
+</body></html>"#,
+        now = esc(&now),
+        summary = esc(&health.summary),
+        cpu = esc(&fw.cpu),
+        cores = fw.cores,
+        threads = fw.threads,
+        gpu_row = gpu_row,
+        board = esc(&fw.board),
+        bios_vendor = esc(&fw.bios_vendor),
+        bios_version = esc(&fw.bios_version),
+        bios_date = esc(&fw.bios_date),
+        mem_total = mem.total_gb,
+        profile = if mem.profile_enabled { "включён" } else { "выключен (базовый JEDEC)" },
+        mem_rows = mem_rows,
+        findings = findings,
+    )
+}
+
+#[cfg(test)]
+mod hw_tests {
+    /// Живая сборка отчёта: `cargo test --lib report::hw_tests -- --nocapture --ignored`
+    #[test]
+    #[ignore]
+    fn builds_on_this_machine() {
+        let html = super::hardware_html(10.0);
+        let out = std::env::temp_dir().join("dotpilot-hw-report.html");
+        std::fs::write(&out, &html).unwrap();
+        println!("отчёт: {} символов -> {}", html.chars().count(), out.display());
+
+        assert!(html.starts_with("<!doctype html>"), "не похоже на HTML");
+        assert!(html.contains("</html>"), "документ не закрыт");
+        for must in ["Состав", "Модули памяти", "Проверка состояния", "не сертификат"] {
+            assert!(html.contains(must), "в отчёте нет раздела «{must}»");
+        }
+        // Внешних ссылок быть не должно: файл обязан открываться без сети.
+        assert!(!html.contains("http://"), "во внешнем файле не должно быть внешних ссылок");
+        assert!(!html.contains("src=\""), "во внешнем файле не должно быть подгружаемых ресурсов");
+    }
+}

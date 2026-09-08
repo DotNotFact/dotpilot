@@ -6,6 +6,7 @@ mod config;
 mod fanctl;
 mod health;
 mod perms;
+mod maintenance;
 mod net;
 mod nvapi;
 mod ocloop;
@@ -225,7 +226,10 @@ async fn oc_validate(
         let v = ocsafe::validate(evidence);
         match &v {
             Ok(r) if r.passed => st.log("info", format!("Проверка разгона: {}", r.reason)),
-            Ok(r) => st.log("warn", format!("Проверка разгона не пройдена: {}", r.reason)),
+            Ok(r) => {
+                st.log("warn", format!("Проверка разгона не пройдена: {}", r.reason));
+                maintenance::notify_if_enabled(&st.cfg(), &format!("DotPilot: разгон откачен.\n{}", r.reason));
+            }
             Err(e) => st.log("error", format!("Проверка разгона сорвалась: {e}")),
         }
         v
@@ -260,6 +264,48 @@ async fn oc_propose(state: State<'_, Shared>, note: String) -> Result<ocloop::Su
                 Err(err(e))
             }
         }
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Список задач обслуживания с расчётом, что уже пора делать.
+#[tauri::command]
+fn maintenance_state() -> Vec<maintenance::Task> {
+    maintenance::tasks()
+}
+
+/// Отметить задачу обслуживания выполненной.
+#[tauri::command]
+fn maintenance_done(state: State<'_, Shared>, id: String) -> Result<Vec<maintenance::Task>, String> {
+    maintenance::mark_done(&id)?;
+    state.log("info", format!("Обслуживание: отмечено выполненным — {id}"));
+    Ok(maintenance::tasks())
+}
+
+/// Пробное уведомление: проверяет, что токен и чат заданы верно.
+#[tauri::command]
+async fn notify_test(state: State<'_, Shared>) -> Result<maintenance::NotifyResult, String> {
+    let cfg = state.cfg();
+    tauri::async_runtime::spawn_blocking(move || {
+        maintenance::send(&cfg, "DotPilot: проверка связи. Если вы это видите, уведомления настроены.")
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Отчёт о состоянии железа одним HTML-файлом — для продажи или передачи техники.
+#[tauri::command]
+async fn hardware_report(state: State<'_, Shared>, path: Option<String>) -> Result<String, String> {
+    let st = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let load = st.snap.lock().unwrap().cpu.usage;
+        let html = report::hardware_html(load);
+        if let Some(p) = &path {
+            std::fs::write(p, &html).map_err(err)?;
+            st.log("info", format!("Отчёт о состоянии сохранён: {p}"));
+        }
+        Ok(html)
     })
     .await
     .map_err(err)?
@@ -352,6 +398,20 @@ async fn health_check(state: State<'_, Shared>) -> Result<health::HealthReport, 
             if r.problems > 0 { "warn" } else { "info" },
             format!("Проверка состояния: {}", r.summary),
         );
+        // Уведомление только о том, что действительно требует внимания: рассылка
+        // по каждому замечанию быстро научит её игнорировать.
+        if r.problems > 0 {
+            let details: Vec<String> = r
+                .findings
+                .iter()
+                .filter(|f| f.severity == health::Severity::Problem)
+                .map(|f| format!("• {} — {}: {}", f.area, f.title, f.measured))
+                .collect();
+            maintenance::notify_if_enabled(
+                &st.cfg(),
+                &format!("DotPilot: проблемы с ПК\n\n{}", details.join("\n")),
+            );
+        }
         r
     })
     .await
@@ -1643,6 +1703,10 @@ pub fn run() {
             let report = ocsafe::boot_check();
             if report.recovered {
                 state.log("warn", report.message.clone());
+                maintenance::notify_if_enabled(
+                    &state.cfg(),
+                    &format!("DotPilot: восстановление после сбоя.\n{}", report.message),
+                );
             }
 
             let st = state.clone();
@@ -1720,6 +1784,10 @@ pub fn run() {
             voltage_set_offset,
             voltage_reset,
             trends_report,
+            maintenance_state,
+            maintenance_done,
+            notify_test,
+            hardware_report,
             anticheat_status,
             anticheat_set_mode,
             fans_state,
