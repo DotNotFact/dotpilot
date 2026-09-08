@@ -1,14 +1,76 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AreaChart, Area, ResponsiveContainer, YAxis, XAxis, Tooltip, CartesianGrid } from "recharts";
 import { useStore } from "../store";
-import { Section, Tile, Bar } from "../components/ui";
-import { timeHM } from "../lib/api";
+import { Section, Tile, Bar, Tag, StatusPill } from "../components/ui";
+import {
+  timeHM,
+  api,
+  type FirmwareInfo,
+  type MemoryConfig,
+  type Baseline,
+  type Comparison,
+  type BiosSuggestion,
+} from "../lib/api";
 
 const history: { t: number; cpu: number; mem: number }[] = [];
 
 export default function Cpu() {
   const snap = useStore((s) => s.snap);
   const lastT = useRef(0);
+  const [fw, setFw] = useState<FirmwareInfo | null>(null);
+  const [mem, setMem] = useState<MemoryConfig | null>(null);
+  const [baselines, setBaselines] = useState<Baseline[]>([]);
+  const [cmp, setCmp] = useState<Comparison | null>(null);
+  const [bios, setBios] = useState<BiosSuggestion | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [plErr, setPlErr] = useState<string | null>(null);
+
+  const loadPlatform = () => {
+    api
+      .platformState()
+      .then(([f, m]) => {
+        setFw(f);
+        setMem(m);
+      })
+      .catch((e) => setPlErr(String(e)));
+    api
+      .platformBaselines()
+      .then(([store, c]) => {
+        setBaselines(store.items);
+        setCmp(c);
+      })
+      .catch(() => {});
+  };
+
+  useEffect(loadPlatform, []);
+
+  const measure = async (label: string) => {
+    setBusy("Идёт замер: нагрузка на процессор и проверка памяти…");
+    setPlErr(null);
+    try {
+      const store = await api.platformMeasure(label);
+      setBaselines(store.items);
+      const [, c] = await api.platformBaselines();
+      setCmp(c);
+      loadPlatform();
+    } catch (e) {
+      setPlErr(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const askBios = async () => {
+    setBusy("Claude разбирает замеры…");
+    setPlErr(null);
+    try {
+      setBios(await api.biosAdvice(""));
+    } catch (e) {
+      setPlErr(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
   useEffect(() => {
     if (!snap) return;
     if (snap.ts !== lastT.current) {
@@ -24,7 +86,7 @@ export default function Cpu() {
       <header>
         <div className="eyebrow">Процессор</div>
         <h1 className="text-[24px] mt-1">{c.name || "CPU"}</h1>
-        <p className="text-ink-2 text-[12.5px] mt-1">Мониторинг в реальном времени. Управление лимитами (PBO, Curve Optimizer, схемы питания по ядрам) — в разработке; пока схема питания переключается на странице «Профили».</p>
+        <p className="text-ink-2 text-[12.5px] mt-1">Мониторинг в реальном времени. PBO, Curve Optimizer и EXPO переключаются только в BIOS — ниже приложение меряет их эффект до и после и подсказывает конкретные значения. Схема питания переключается на странице «Профили».</p>
       </header>
       <div className="grid grid-cols-4 gap-3">
         <Tile label="Загрузка" value={c.usage.toFixed(0)} unit="%" color="var(--color-teal)" />
@@ -73,6 +135,115 @@ export default function Cpu() {
           </div>
         </div>
       </Section>
+      <Section
+        title="Настройка через BIOS"
+        sub="Реальные рычаги Zen 4 — EXPO, PBO и Curve Optimizer — живут в BIOS и из Windows не переключаются. Приложение делает то, что умеет честно: меряет до и после и подтверждает результат числами."
+        right={fw ? <Tag>{`BIOS ${fw.bios_version} от ${fw.bios_date}`}</Tag> : undefined}
+      >
+        {mem && (
+          <div className="panel-2 px-3.5 py-3">
+            <div className="flex items-start gap-2.5">
+              <StatusPill ok={mem.profile_enabled} warn={!mem.profile_enabled} text={mem.profile_enabled ? "включён" : "выключен"} />
+              <div className="min-w-0">
+                <div className="text-[13px]">Профиль памяти EXPO</div>
+                <div className="text-[12px] text-ink-2 mt-0.5">{mem.verdict}</div>
+                <div className="text-[11.5px] text-ink-3 mt-1">
+                  {mem.modules.map((m) => `${m.bank}: ${m.capacity_gb.toFixed(0)} ГБ, ${m.configured_mts} МТ/с, ${(m.configured_mv / 1000).toFixed(3)} В`).join(" · ")}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="flex items-center gap-2 mt-3">
+          <button className="btn" disabled={!!busy} onClick={() => measure(mem?.profile_enabled ? "после правки" : "до правки")}>
+            Снять замер
+          </button>
+          <button className="btn" disabled={!!busy || baselines.length === 0} onClick={askBios}>
+            Спросить Claude, что менять
+          </button>
+          {busy && <span className="text-[12px] text-ink-2">{busy}</span>}
+        </div>
+        {plErr && <div className="text-[12.5px] text-coral mt-2">{plErr}</div>}
+
+        {baselines.length > 0 && (
+          <div className="mt-3">
+            <div className="eyebrow mb-1.5">Замеры</div>
+            <div className="flex flex-col gap-1">
+              {baselines.slice(-5).reverse().map((b, i) => (
+                <div key={i} className="text-[12px] text-ink-2">
+                  <span className="num text-ink-3">{timeHM(b.at * 1000)}</span> · {b.label} — процессор{" "}
+                  <span className="num">{b.cpu_passes_per_sec.toFixed(0)}</span> проходов/с, память{" "}
+                  <span className="num">{b.memory_mb_per_sec.toFixed(0)}</span> МБ/с
+                  {b.loaded_clock_mhz != null && <>, частота под нагрузкой <span className="num">{b.loaded_clock_mhz.toFixed(0)}</span> МГц</>}
+                  {(b.cpu_mismatches > 0 || b.memory_mismatches > 0) && <span className="text-coral"> · есть ошибки</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {cmp && (
+          <div className="panel-2 px-3.5 py-3 mt-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-[13px]">Разница между двумя последними замерами</div>
+              {cmp.stable ? <Tag color="var(--color-mint)">ошибок нет</Tag> : <Tag color="var(--color-coral)">найдены ошибки</Tag>}
+            </div>
+            <div className="grid grid-cols-3 gap-3 mt-2">
+              <Tile
+                label="Процессор"
+                value={`${cmp.cpu_delta_percent > 0 ? "+" : ""}${cmp.cpu_delta_percent.toFixed(1)}`}
+                unit="%"
+                color={cmp.cpu_delta_percent >= 0 ? "var(--color-mint)" : "var(--color-coral)"}
+              />
+              <Tile
+                label="Память"
+                value={`${cmp.memory_delta_percent > 0 ? "+" : ""}${cmp.memory_delta_percent.toFixed(1)}`}
+                unit="%"
+                color={cmp.memory_delta_percent >= 0 ? "var(--color-mint)" : "var(--color-coral)"}
+              />
+              <Tile
+                label="Частота под нагрузкой"
+                value={cmp.clock_delta_mhz != null ? `${cmp.clock_delta_mhz > 0 ? "+" : ""}${cmp.clock_delta_mhz.toFixed(0)}` : "—"}
+                unit="МГц"
+              />
+            </div>
+            <div className="text-[12px] text-ink-2 mt-2">{cmp.summary}</div>
+          </div>
+        )}
+
+        {bios && (
+          <div className="mt-3">
+            <div className="eyebrow mb-1.5">Что менять — от Claude</div>
+            <div className="flex flex-col gap-2">
+              {bios.advice.settings.map((s, i) => (
+                <div key={i} className="panel-2 px-3.5 py-3">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <div className="text-[13px]">{s.path}</div>
+                    <Tag color="var(--color-teal)">{s.value}</Tag>
+                  </div>
+                  <div className="text-[12px] text-ink-2 mt-1">{s.why}</div>
+                  <div className="text-[11.5px] text-ink-3 mt-1">Риск и откат: {s.risk}</div>
+                </div>
+              ))}
+            </div>
+            <div className="text-[12px] text-ink-2 mt-2">
+              <div><span className="text-ink-3">Порядок: </span>{bios.advice.order}</div>
+              <div className="mt-1"><span className="text-ink-3">Проверить после: </span>{bios.advice.verify}</div>
+              <div className="mt-1"><span className="text-ink-3">Чего ждать: </span>{bios.advice.expected_gain}</div>
+            </div>
+            {bios.advice.warnings.length > 0 && (
+              <ul className="text-[12px] text-amber mt-2 list-disc pl-5">
+                {bios.advice.warnings.map((w, i) => <li key={i}>{w}</li>)}
+              </ul>
+            )}
+            <div className="text-[11.5px] text-ink-3 mt-2">
+              {bios.model} · {bios.input_tokens} вход / {bios.output_tokens} выход
+            </div>
+          </div>
+        )}
+      </Section>
+
       <Section title="История, последние 6 минут">
         <ResponsiveContainer width="100%" height={220}>
           <AreaChart data={[...history]} margin={{ top: 8, right: 12, left: -10, bottom: 0 }}>

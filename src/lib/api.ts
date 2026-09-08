@@ -502,7 +502,87 @@ export interface OcSuggestion {
   output_tokens: number;
 }
 
+/** Замер платформы: то, что меняется в BIOS, плюс результаты встроенных тестов. */
+export interface MemoryModule {
+  bank: string;
+  capacity_gb: number;
+  configured_mts: number;
+  configured_mv: number;
+  part_number: string;
+}
+
+export interface MemoryConfig {
+  modules: MemoryModule[];
+  total_gb: number;
+  profile_enabled: boolean;
+  verdict: string;
+}
+
+export interface FirmwareInfo {
+  board: string;
+  bios_vendor: string;
+  bios_version: string;
+  bios_date: string;
+  cpu: string;
+  cpu_base_mhz: number;
+  cores: number;
+  threads: number;
+}
+
+export interface Baseline {
+  at: number;
+  label: string;
+  firmware: FirmwareInfo;
+  memory: MemoryConfig;
+  loaded_clock_mhz: number | null;
+  cpu_passes_per_sec: number;
+  memory_mb_per_sec: number;
+  cpu_mismatches: number;
+  memory_mismatches: number;
+}
+
+export interface BaselineStore {
+  items: Baseline[];
+}
+
+export interface Comparison {
+  cpu_delta_percent: number;
+  memory_delta_percent: number;
+  clock_delta_mhz: number | null;
+  memory_profile_changed: boolean;
+  bios_version_changed: boolean;
+  stable: boolean;
+  summary: string;
+}
+
+export interface BiosSetting {
+  path: string;
+  value: string;
+  why: string;
+  risk: string;
+}
+
+export interface BiosAdvice {
+  settings: BiosSetting[];
+  order: string;
+  verify: string;
+  expected_gain: string;
+  warnings: string[];
+}
+
+export interface BiosSuggestion {
+  advice: BiosAdvice;
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+}
+
 export const api = {
+  platformState: () => invoke<[FirmwareInfo, MemoryConfig]>("platform_state"),
+  platformMeasure: (label: string, seconds = 8, memoryMb = 512) =>
+    invoke<BaselineStore>("platform_measure", { label, seconds, memoryMb }),
+  platformBaselines: () => invoke<[BaselineStore, Comparison | null]>("platform_baselines"),
+  biosAdvice: (question = "") => invoke<BiosSuggestion>("bios_advice", { question }),
   ocPropose: (note = "") => invoke<OcSuggestion>("oc_propose", { note }),
   ocValidate: (evidence: StageEvidence) => invoke<StageVerdict>("oc_validate", { evidence }),
   benchCpu: (seconds: number, threads = 0) => invoke<StressResult>("bench_cpu", { seconds, threads }),

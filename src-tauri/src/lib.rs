@@ -8,6 +8,7 @@ mod nvapi;
 mod ocloop;
 mod ocsafe;
 mod ping;
+mod platform;
 mod policy;
 mod ps;
 mod report;
@@ -254,6 +255,75 @@ async fn oc_propose(state: State<'_, Shared>, note: String) -> Result<ocloop::Su
     })
     .await
     .map_err(err)?
+}
+
+/// План правок BIOS от Claude на основе снятых замеров.
+#[tauri::command]
+async fn bios_advice(state: State<'_, Shared>, question: String) -> Result<ocloop::BiosSuggestion, String> {
+    let st = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let cfg = st.cfg();
+        match ocloop::advise_bios(&cfg, &question) {
+            Ok(s) => {
+                st.log("info", format!("Claude предложил {} правок в BIOS", s.advice.settings.len()));
+                Ok(s)
+            }
+            Err(e) => {
+                st.log("error", format!("Совет по BIOS не получен: {e}"));
+                Err(err(e))
+            }
+        }
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Состояние того, что настраивается в BIOS: память, прошивка, профиль.
+#[tauri::command]
+async fn platform_state() -> Result<(platform::FirmwareInfo, platform::MemoryConfig), String> {
+    tauri::async_runtime::spawn_blocking(|| (platform::firmware_info(), platform::memory_config()))
+        .await
+        .map_err(err)
+}
+
+/// Снять замер: прогнать тесты и записать результат для сравнения до и после BIOS.
+#[tauri::command]
+async fn platform_measure(
+    state: State<'_, Shared>,
+    label: String,
+    seconds: u64,
+    memory_mb: usize,
+) -> Result<platform::BaselineStore, String> {
+    let st = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let b = platform::measure(&label, seconds, memory_mb);
+        st.log(
+            "info",
+            format!(
+                "Замер «{}»: процессор {:.0} проходов/с, память {:.0} МБ/с, частота под нагрузкой {}",
+                b.label,
+                b.cpu_passes_per_sec,
+                b.memory_mb_per_sec,
+                b.loaded_clock_mhz.map(|c| format!("{c:.0} МГц")).unwrap_or("неизвестна".into())
+            ),
+        );
+        platform::save_baseline(b)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Сохранённые замеры и сравнение двух последних.
+#[tauri::command]
+fn platform_baselines() -> (platform::BaselineStore, Option<platform::Comparison>) {
+    let store = platform::load_baselines();
+    let cmp = if store.items.len() >= 2 {
+        let n = store.items.len();
+        Some(platform::compare(&store.items[n - 2], &store.items[n - 1]))
+    } else {
+        None
+    };
+    (store, cmp)
 }
 
 /// Нагрузка на процессор со сверкой контрольных сумм.
@@ -1412,7 +1482,11 @@ pub fn run() {
             bench_cpu,
             bench_memory,
             gpu_peak_temp,
-            oc_propose
+            oc_propose,
+            platform_state,
+            platform_measure,
+            platform_baselines,
+            bios_advice
         ])
         .run(tauri::generate_context!())
         .expect("error while running DotPilot");
