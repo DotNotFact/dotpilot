@@ -1,0 +1,14 @@
+# зависимости и сборки
+node_modules
+dist
+src-tauri/target
+src-tauri/gen/schemas
+
+# собранный портативный бинарник — весит 9 МБ, собирается из исходников
+DotPilot.exe
+
+# локальное состояние: конфиг хранит API-ключ Anthropic в открытом виде
+DotPilot.config.json
+DotPilot.oc.json
+*.json.tmp
+
