@@ -1,6 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Section, Tag, StatusPill, Label } from "../components/ui";
-import { api, type VoltageState } from "../lib/api";
+import { api, type VoltageState, type TuneState } from "../lib/api";
+
+/** Длительность одного шага подбора и объём проверяемой памяти. */
+const STEP_SECONDS = 60;
+const STEP_MEMORY_MB = 512;
 
 export default function Experiments() {
   const [st, setSt] = useState<VoltageState | null>(null);
@@ -9,6 +13,42 @@ export default function Experiments() {
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [armed, setArmed] = useState(false);
+  const [tune, setTune] = useState<TuneState | null>(null);
+  const [tuning, setTuning] = useState(false);
+  const tuningRef = useRef(false);
+
+  /**
+   * Подбор идёт шагами, а не одной длинной командой: каждый шаг применяет
+   * следующее смещение и сам себя проверяет, а между шагами интерфейс успевает
+   * показать результат и дать возможность остановиться.
+   */
+  const runTuning = async () => {
+    if (tuningRef.current) {
+      tuningRef.current = false;
+      await api.cpuTuneStop().then(setTune).catch((e) => setErr(String(e)));
+      setTuning(false);
+      return;
+    }
+    setErr(null);
+    setMsg(null);
+    tuningRef.current = true;
+    setTuning(true);
+    try {
+      setTune(await api.cpuTuneStart());
+      while (tuningRef.current) {
+        const r = await api.cpuTuneStep(STEP_SECONDS, STEP_MEMORY_MB);
+        setTune(r.state);
+        setMsg(r.detail);
+        if (!r.passed || r.state.finished) break;
+      }
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      tuningRef.current = false;
+      setTuning(false);
+      await refresh();
+    }
+  };
 
   const refresh = () =>
     api
@@ -21,6 +61,7 @@ export default function Experiments() {
 
   useEffect(() => {
     refresh();
+    api.cpuTuneState().then(setTune).catch(() => setTune(null));
   }, []);
 
   const run = async (fn: () => Promise<unknown>, ok?: string) => {
@@ -162,6 +203,60 @@ export default function Experiments() {
 
           {msg && <div className="text-[12.5px] text-ink-2 mt-2">{msg}</div>}
           {err && <div className="text-[12.5px] text-coral mt-2">{err}</div>}
+
+          <div className="panel-2 px-3.5 py-3 mt-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-[13px]">Автоподбор смещения</div>
+                <div className="text-[11.5px] text-ink-2 mt-0.5">
+                  Шаг 25 мВ вниз, после каждого — {STEP_SECONDS} секунд нагрузки на процессор и проверка памяти. При
+                  первом сбое возврат на два шага вверх.
+                </div>
+              </div>
+              <button className="btn shrink-0" disabled={busy || !armed} onClick={runTuning}>
+                {tuning ? "Остановить" : "Начать подбор"}
+              </button>
+            </div>
+
+            {tune && (tune.history.length > 0 || tuning) && (
+              <>
+                <div className="grid grid-cols-3 gap-3 mt-3">
+                  <div>
+                    <div className="eyebrow">Устойчиво до</div>
+                    <div className="num text-[20px] text-mint">{tune.deepest_stable_mv} мВ</div>
+                  </div>
+                  <div>
+                    <div className="eyebrow">Сбой на</div>
+                    <div className="num text-[20px]" style={{ color: tune.first_unstable_mv != null ? "var(--color-coral)" : undefined }}>
+                      {tune.first_unstable_mv != null ? `${tune.first_unstable_mv} мВ` : "—"}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="eyebrow">Оставлено</div>
+                    <div className="num text-[20px] text-teal">
+                      {tune.recommended_mv != null ? `${tune.recommended_mv} мВ` : "—"}
+                    </div>
+                  </div>
+                </div>
+
+                {tuning && (
+                  <div className="text-[12px] text-amber mt-2">
+                    Идёт шаг: процессор под полной нагрузкой. Это займёт около минуты на шаг.
+                  </div>
+                )}
+
+                {tune.history.length > 0 && (
+                  <div className="mt-2.5 flex flex-col gap-1">
+                    {tune.history.slice(-8).reverse().map((h, i) => (
+                      <div key={i} className="text-[11.5px] text-ink-2">
+                        <span className="num text-ink-3">{h.offset_mv} мВ</span> · {h.detail}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
 
           <div className="mt-3">
             <Label

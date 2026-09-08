@@ -15,5 +15,6 @@ DotPilot.trends.json
 DotPilot.maintenance.json
 DotPilot.gpuprofiles.json
 DotPilot.noise.json
+DotPilot.cpuoc.json
 *.json.tmp
 

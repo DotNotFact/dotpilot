@@ -4,6 +4,7 @@ mod appprofiles;
 mod audio;
 mod bench;
 mod config;
+mod cpuoc;
 mod fanctl;
 mod health;
 mod perms;
@@ -455,6 +456,58 @@ async fn trends_report(state: State<'_, Shared>) -> Result<trends::TrendReport, 
     tauri::async_runtime::spawn_blocking(move || trends::report(tariff))
         .await
         .map_err(err)
+}
+
+/// Состояние автоподбора смещения напряжения процессора.
+#[tauri::command]
+fn cpu_tune_state() -> cpuoc::TuneState {
+    cpuoc::load()
+}
+
+/// Начать подбор заново от нулевого смещения.
+#[tauri::command]
+async fn cpu_tune_start(state: State<'_, Shared>) -> Result<cpuoc::TuneState, String> {
+    let st = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let r = cpuoc::start();
+        if r.is_ok() {
+            st.log("info", "Автоподбор напряжения процессора начат");
+        }
+        r
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Один шаг подбора: применить следующее смещение и проверить его.
+#[tauri::command]
+async fn cpu_tune_step(state: State<'_, Shared>, seconds: u64, memory_mb: usize) -> Result<cpuoc::StepResult, String> {
+    let st = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let r = cpuoc::step(seconds, memory_mb);
+        match &r {
+            Ok(s) => st.log(if s.passed { "info" } else { "warn" }, format!("Автоподбор напряжения: {}", s.detail)),
+            Err(e) => st.log("error", format!("Шаг подбора не выполнен: {e}")),
+        }
+        r
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Остановить подбор и оставить последнее устойчивое значение.
+#[tauri::command]
+async fn cpu_tune_stop(state: State<'_, Shared>) -> Result<cpuoc::TuneState, String> {
+    let st = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let r = cpuoc::stop();
+        if r.is_ok() {
+            st.log("info", "Автоподбор напряжения остановлен");
+        }
+        r
+    })
+    .await
+    .map_err(err)?
 }
 
 /// Регуляторы напряжения, которые отдаёт ACPI-интерфейс платы.
@@ -1859,6 +1912,14 @@ pub fn run() {
             // между стартом и первым обращением к интерфейсу запись была бы разрешена.
             anticheat::set_safe_mode(state.cfg().anticheat_safe_mode);
 
+            // Тот же принцип для подбора напряжения: неподтверждённый шаг означает,
+            // что прошлый сеанс не дожил до вердикта. Смещение к этому моменту уже
+            // снято перезагрузкой, но запомнить неудачное значение необходимо.
+            if let Some(msg) = cpuoc::boot_check() {
+                state.log("warn", msg.clone());
+                maintenance::notify_if_enabled(&state.cfg(), &format!("DotPilot: {msg}"));
+            }
+
             // Проверка сбоя должна пройти до того, как что-либо снова применится
             // к карте: неподтверждённая запись в журнале означает прошлый вылет.
             let report = ocsafe::boot_check();
@@ -1942,6 +2003,10 @@ pub fn run() {
             bios_photo,
             health_check,
             health_advice,
+            cpu_tune_state,
+            cpu_tune_start,
+            cpu_tune_step,
+            cpu_tune_stop,
             voltage_state,
             voltage_set_offset,
             voltage_reset,

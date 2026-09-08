@@ -631,6 +631,31 @@ export interface HealthReport {
   summary: string;
 }
 
+/** Автоподбор общего смещения напряжения процессора. */
+export interface TuneEvent {
+  at: number;
+  offset_mv: number;
+  outcome: string;
+  detail: string;
+}
+
+export interface TuneState {
+  regulator_id: number | null;
+  deepest_stable_mv: number;
+  first_unstable_mv: number | null;
+  pending: { offset_mv: number; started_at: number; boot_id: number } | null;
+  recommended_mv: number | null;
+  finished: boolean;
+  history: TuneEvent[];
+}
+
+export interface TuneStepResult {
+  offset_mv: number;
+  passed: boolean;
+  detail: string;
+  state: TuneState;
+}
+
 /** Регуляторы напряжения из ACPI-интерфейса платы. Экспериментально. */
 export interface VoltageItem {
   id: number;
@@ -818,6 +843,10 @@ export const api = {
   anticheatStatus: () => invoke<AntiCheatStatus>("anticheat_status"),
   anticheatSetMode: (on: boolean) => invoke<void>("anticheat_set_mode", { on }),
   trendsReport: () => invoke<TrendReport>("trends_report"),
+  cpuTuneState: () => invoke<TuneState>("cpu_tune_state"),
+  cpuTuneStart: () => invoke<TuneState>("cpu_tune_start"),
+  cpuTuneStep: (seconds: number, memoryMb: number) => invoke<TuneStepResult>("cpu_tune_step", { seconds, memoryMb }),
+  cpuTuneStop: () => invoke<TuneState>("cpu_tune_stop"),
   voltageState: () => invoke<VoltageState>("voltage_state"),
   voltageSetOffset: (id: number, millivolts: number) => invoke<number>("voltage_set_offset", { id, millivolts }),
   voltageReset: () => invoke<void>("voltage_reset"),
