@@ -746,7 +746,23 @@ export interface SwitchResult {
   detail: string;
 }
 
+/** Бюджет шума: потолок оборотов и автоснижение мощности под него. */
+export interface NoiseBudget {
+  enabled: boolean;
+  max_fan_percent: number;
+  target_temp_c: number;
+  floor_power_percent: number;
+  ceiling_power_percent: number;
+  current_power_percent: number;
+  last_reason: string;
+  last_change: number | null;
+}
+
 export const api = {
+  noiseState: () => invoke<NoiseBudget>("noise_state"),
+  noiseEnable: (on: boolean) => invoke<NoiseBudget>("noise_enable", { on }),
+  noiseUpdate: (maxFan: number, targetTemp: number, floor: number, ceiling: number) =>
+    invoke<NoiseBudget>("noise_update", { maxFan, targetTemp, floor, ceiling }),
   gpuProfiles: () => invoke<ProfileStore>("gpu_profiles"),
   gpuProfileCreate: (name: string, appIds: string[]) => invoke<ProfileStore>("gpu_profile_create", { name, appIds }),
   gpuProfileBind: (id: string, appIds: string[]) => invoke<ProfileStore>("gpu_profile_bind", { id, appIds }),

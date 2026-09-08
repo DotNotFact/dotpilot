@@ -13,6 +13,7 @@ import {
   type OcSuggestion,
   type StageVerdict,
   type ProfileStore,
+  type NoiseBudget,
 } from "../lib/api";
 import { runGpuTest, type GpuTestProgress } from "../lib/gputest";
 
@@ -64,6 +65,7 @@ export default function Gpu() {
   const [suggestion, setSuggestion] = useState<OcSuggestion | null>(null);
   const [profiles, setProfiles] = useState<ProfileStore | null>(null);
   const [newName, setNewName] = useState("");
+  const [noise, setNoise] = useState<NoiseBudget | null>(null);
   const cfg = useStore((s) => s.cfg);
   // Пик температуры набирается из общего опроса NVAPI, чтобы не дёргать драйвер отдельно.
   const testingRef = useRef(false);
@@ -191,6 +193,10 @@ export default function Gpu() {
   useEffect(() => {
     api.gpuCapabilities().then(setCaps).catch(() => setCaps(null));
     api.gpuProfiles().then(setProfiles).catch(() => setProfiles(null));
+    api.noiseState().then(setNoise).catch(() => setNoise(null));
+    // Петля работает в фоне и меняет мощность сама — интерфейс должен это показывать.
+    const t = setInterval(() => api.noiseState().then(setNoise).catch(() => {}), 15000);
+    return () => clearInterval(t);
   }, []);
 
   // NVAPI опрашивается отдельно от общего снимка: вызовы дешёвые, но идут в драйвер.
@@ -584,6 +590,88 @@ export default function Gpu() {
               </div>
             </div>
           )}
+        </Section>
+      )}
+
+      {noise && (
+        <Section
+          title="Бюджет шума"
+          sub="Задаётся в оборотах, а не в децибелах: измерить шум приложению нечем, а переводить проценты в децибелы значило бы выдумывать числа."
+          right={
+            <div className="flex items-center gap-2">
+              <span className="text-[12px] text-ink-2">включить</span>
+              <Switch
+                on={noise.enabled}
+                disabled={busy}
+                onChange={(v) => run(() => api.noiseEnable(v).then(setNoise))}
+              />
+            </div>
+          }
+        >
+          <div className="grid grid-cols-4 gap-3">
+            {(
+              [
+                ["Потолок оборотов, %", "max_fan_percent", 30, 100, 5],
+                ["Цель по температуре, °C", "target_temp_c", 60, 85, 1],
+                ["Мощность не ниже, %", "floor_power_percent", 50, 110, 5],
+                ["Мощность не выше, %", "ceiling_power_percent", 50, 110, 5],
+              ] as const
+            ).map(([label, key, min, max, step]) => (
+              <div key={key} className="panel-2 px-3.5 py-3">
+                <div className="eyebrow">{label}</div>
+                <input
+                  className="input num w-full mt-1.5"
+                  type="number"
+                  min={min}
+                  max={max}
+                  step={step}
+                  value={noise[key]}
+                  disabled={busy}
+                  onChange={(e) => setNoise({ ...noise, [key]: Number(e.target.value) })}
+                  onBlur={() =>
+                    run(() =>
+                      api
+                        .noiseUpdate(
+                          noise.max_fan_percent,
+                          noise.target_temp_c,
+                          noise.floor_power_percent,
+                          noise.ceiling_power_percent,
+                        )
+                        .then(setNoise),
+                    )
+                  }
+                />
+              </div>
+            ))}
+          </div>
+
+          <div className="panel-2 px-3.5 py-3 mt-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-[13px]">
+                Сейчас мощность {noise.current_power_percent.toFixed(0)} % из {noise.ceiling_power_percent.toFixed(0)} %
+              </div>
+              {noise.last_change && <span className="text-[11.5px] text-ink-3">изменено в {timeHM(noise.last_change * 1000)}</span>}
+            </div>
+            <div className="mt-2">
+              <Bar
+                value={noise.current_power_percent - noise.floor_power_percent}
+                max={Math.max(1, noise.ceiling_power_percent - noise.floor_power_percent)}
+                color={noise.current_power_percent < noise.ceiling_power_percent ? "var(--color-amber)" : "var(--color-mint)"}
+              />
+            </div>
+            <div className="text-[12px] text-ink-2 mt-1.5">{noise.last_reason}</div>
+          </div>
+
+          <div className="mt-3">
+            <Label
+              title="Как работает потолок оборотов"
+              text="NVAPI умеет только автоматику драйвера или фиксированный уровень — режима «не выше X» в нём нет. Поэтому под нагрузкой уровень фиксируется на потолке, а в простое возвращается автоматика: под нагрузкой кривая драйвера всё равно ушла бы выше потолка, а в простое она тише него."
+              rec="Если при заданных оборотах температура уходит выше цели, приложение снижает лимит мощности шагами по 5 %, пока не уложится. Когда запас появляется — возвращает обратно."
+              warn="Пока бюджет включён, лимитом мощности распоряжается он: значение мощности из профиля приложения не действует, смещения частот действуют по-прежнему. Иначе два механизма боролись бы за один регулятор."
+            >
+              <span className="text-[12px] text-ink-2">Почему так, а не в децибелах</span>
+            </Label>
+          </div>
         </Section>
       )}
 

@@ -9,6 +9,7 @@ mod health;
 mod perms;
 mod maintenance;
 mod net;
+mod noise;
 mod nvapi;
 mod ocloop;
 mod ocsafe;
@@ -268,6 +269,38 @@ async fn oc_propose(state: State<'_, Shared>, note: String) -> Result<ocloop::Su
     })
     .await
     .map_err(err)?
+}
+
+/// Бюджет шума: потолок оборотов и автоснижение мощности под него.
+#[tauri::command]
+fn noise_state() -> noise::NoiseBudget {
+    noise::load()
+}
+
+#[tauri::command]
+async fn noise_enable(state: State<'_, Shared>, on: bool) -> Result<noise::NoiseBudget, String> {
+    let st = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let r = noise::set_enabled(on);
+        if r.is_ok() {
+            st.log(
+                "info",
+                if on {
+                    "Бюджет шума включён: под нагрузкой обороты держатся на потолке, мощность подстраивается"
+                } else {
+                    "Бюджет шума выключен, обороты и мощность возвращены"
+                },
+            );
+        }
+        r
+    })
+    .await
+    .map_err(err)?
+}
+
+#[tauri::command]
+fn noise_update(max_fan: u32, target_temp: i32, floor: f32, ceiling: f32) -> Result<noise::NoiseBudget, String> {
+    noise::update(max_fan, target_temp, floor, ceiling)
 }
 
 /// Профили разгона по приложениям.
@@ -787,6 +820,14 @@ fn collector(app: tauri::AppHandle, st: Shared) {
             // Образец для долгих наблюдений. Модуль сам ограничивает частоту записи,
             // поэтому вызывать его на каждом медленном цикле безопасно.
             trends::maybe_record(&cached_gpu, cpu.usage);
+
+            // Петля бюджета шума. Модуль сам держит паузу между решениями: у нагрева
+            // большая инерция, и частая подстройка приводила бы к раскачке.
+            if cached_gpu.available {
+                if let Some(what) = noise::tick(cached_gpu.temp_c as i32, cached_gpu.util_pct as u32) {
+                    st.log("info", format!("Бюджет шума: {what}"));
+                }
+            }
             if !hidden {
                 cached_wifi = net::wifi_info().unwrap_or_default();
             }
@@ -1851,6 +1892,9 @@ pub fn run() {
             voltage_set_offset,
             voltage_reset,
             trends_report,
+            noise_state,
+            noise_enable,
+            noise_update,
             gpu_profiles,
             gpu_profile_create,
             gpu_profile_bind,
