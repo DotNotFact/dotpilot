@@ -577,7 +577,37 @@ export interface BiosSuggestion {
   output_tokens: number;
 }
 
+/** Вентиляторы платы через ACPI-интерфейс Gigabyte. */
+export interface BoardSensor {
+  id: number;
+  celsius: number;
+  connected: boolean;
+}
+
+export interface BoardFan {
+  id: number;
+  stop_enabled: boolean;
+  target_sensor: number;
+  off_limit_c: number;
+  on_limit_c: number;
+}
+
+export interface FanControllerState {
+  available: boolean;
+  hw_id: number | null;
+  sensors: BoardSensor[];
+  fans: BoardFan[];
+  backend: string;
+  note: string;
+}
+
 export const api = {
+  fansState: () => invoke<FanControllerState>("fans_state"),
+  fansSetLimits: (id: number, offC: number, onC: number) => invoke<[number, number]>("fans_set_limits", { id, offC, onC }),
+  fansSetZero: (id: number, enabled: boolean) => invoke<void>("fans_set_zero", { id, enabled }),
+  fansSetSensor: (id: number, sensor: number) => invoke<void>("fans_set_sensor", { id, sensor }),
+  fansForceOn: (id: number) => invoke<void>("fans_force_on", { id }),
+  fansRestore: () => invoke<void>("fans_restore"),
   platformState: () => invoke<[FirmwareInfo, MemoryConfig]>("platform_state"),
   platformMeasure: (label: string, seconds = 8, memoryMb = 512) =>
     invoke<BaselineStore>("platform_measure", { label, seconds, memoryMb }),

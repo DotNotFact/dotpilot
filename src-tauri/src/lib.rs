@@ -2,6 +2,7 @@ mod ai;
 mod audio;
 mod bench;
 mod config;
+mod fanctl;
 mod perms;
 mod net;
 mod nvapi;
@@ -252,6 +253,91 @@ async fn oc_propose(state: State<'_, Shared>, note: String) -> Result<ocloop::Su
                 Err(err(e))
             }
         }
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Состояние вентиляторов и датчиков платы через ACPI-интерфейс.
+#[tauri::command]
+async fn fans_state() -> Result<fanctl::FanControllerState, String> {
+    tauri::async_runtime::spawn_blocking(fanctl::read_state).await.map_err(err)
+}
+
+/// Пороги остановки и запуска вентилятора. Возвращает применённые значения
+/// после обрезки пределами — они могут отличаться от запрошенных.
+#[tauri::command]
+async fn fans_set_limits(state: State<'_, Shared>, id: u8, off_c: u8, on_c: u8) -> Result<(u8, u8), String> {
+    let st = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let r = fanctl::set_temp_limits(id, off_c, on_c);
+        match &r {
+            Ok((o, n)) => st.log("info", format!("Вентилятор {id}: пороги {o}/{n} °C")),
+            Err(e) => st.log("error", format!("Вентилятор {id}: {e}")),
+        }
+        r
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Разрешить или запретить полную остановку вентилятора.
+#[tauri::command]
+async fn fans_set_zero(state: State<'_, Shared>, id: u8, enabled: bool) -> Result<(), String> {
+    let st = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let r = fanctl::set_zero_fan(id, enabled);
+        match &r {
+            Ok(()) => st.log("info", format!("Вентилятор {id}: остановка {}", if enabled { "разрешена" } else { "запрещена" })),
+            Err(e) => st.log("warn", format!("Вентилятор {id}: {e}")),
+        }
+        r
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Привязать вентилятор к другому датчику температуры.
+#[tauri::command]
+async fn fans_set_sensor(state: State<'_, Shared>, id: u8, sensor: u8) -> Result<(), String> {
+    let st = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let r = fanctl::set_target_sensor(id, sensor);
+        if r.is_ok() {
+            st.log("info", format!("Вентилятор {id} привязан к датчику {sensor}"));
+        }
+        r
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Принудительно раскрутить вентилятор, отменив остановку.
+#[tauri::command]
+async fn fans_force_on(state: State<'_, Shared>, id: u8) -> Result<(), String> {
+    let st = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let r = fanctl::force_on(id);
+        if r.is_ok() {
+            st.log("info", format!("Вентилятор {id} раскручен принудительно"));
+        }
+        r
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Вернуть все вентиляторы под кривую Smart Fan из BIOS.
+#[tauri::command]
+async fn fans_restore(state: State<'_, Shared>) -> Result<(), String> {
+    let st = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let r = fanctl::restore_bios_control();
+        match &r {
+            Ok(()) => st.log("info", "Вентиляторы возвращены под управление BIOS"),
+            Err(e) => st.log("error", format!("Не удалось вернуть вентиляторы под BIOS: {e}")),
+        }
+        r
     })
     .await
     .map_err(err)?
@@ -1486,7 +1572,13 @@ pub fn run() {
             platform_state,
             platform_measure,
             platform_baselines,
-            bios_advice
+            bios_advice,
+            fans_state,
+            fans_set_limits,
+            fans_set_zero,
+            fans_set_sensor,
+            fans_force_on,
+            fans_restore
         ])
         .run(tauri::generate_context!())
         .expect("error while running DotPilot");

@@ -27,7 +27,7 @@ const items: { id: Page; label: string; icon: ReactNode; soon?: boolean; hint: s
   { id: "profiles", label: "Профили", icon: <SlidersHorizontal size={17} />, hint: "Готовые режимы ПК: Стандарт, Игра, Работа, Экономия. Схема питания + сеть + службы." },
   { id: "cpu", label: "Процессор", icon: <Cpu size={17} />, hint: "Загрузка по потокам, частота, память." },
   { id: "gpu", label: "Видеокарта", icon: <MonitorCog size={17} />, hint: "Температура, мощность, частоты и память NVIDIA." },
-  { id: "fans", label: "Вентиляторы", icon: <Fan size={17} />, soon: true, hint: "Кривые охлаждения появятся позже (нужен LibreHardwareMonitor)." },
+  { id: "fans", label: "Вентиляторы", icon: <Fan size={17} />, hint: "Вентиляторы платы через ACPI-интерфейс: датчики, пороги остановки, привязка к датчику." },
   { id: "ai", label: "Диагностика Claude", icon: <Sparkles size={17} />, hint: "Отправить снимок сети Claude и получить план действий." },
   { id: "access", label: "Доступ", icon: <KeyRound size={17} />, hint: "Разрешения Windows и зависимости, которые приложение выдаёт себе само." },
   { id: "settings", label: "Настройки", icon: <Settings size={17} />, hint: "Пути к программам, API-ключ, цели пинга." },
