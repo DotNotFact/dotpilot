@@ -396,6 +396,77 @@ pub fn reset() -> Result<Journal, String> {
     r.map(|_| j)
 }
 
+// --- вердикт по ступени ----------------------------------------------------
+
+/// Выше этой температуры настройка считается неприемлемой, даже если ошибок нет:
+/// цель разгона — чтобы карта служила дольше, а не работала на пределе.
+pub const TEMP_LIMIT_C: i32 = 83;
+
+/// Что собрал тест за время ступени.
+#[derive(Deserialize, Clone, Debug)]
+pub struct StageEvidence {
+    /// Несовпадения контрольных сумм в вычислительном тесте видеокарты.
+    pub gpu_mismatches: u64,
+    /// Момент начала проверки, unix-секунды.
+    pub started_at: i64,
+    /// Наибольшая температура ядра за проверку.
+    pub peak_temp_c: Option<i32>,
+    /// Доработал ли тест до конца (false — прервался или завис).
+    pub completed: bool,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct StageVerdict {
+    pub passed: bool,
+    pub reason: String,
+    /// Сбои видеодрайвера, найденные в журнале Windows за время проверки.
+    pub faults: Vec<String>,
+    pub journal: Journal,
+}
+
+/// Решает судьбу текущей ступени и сразу применяет решение.
+///
+/// Проверяются четыре независимых признака. Достаточно одного, чтобы откатить:
+/// молчаливые ошибки вычислений, восстановление видеодрайвера, перегрев и
+/// незавершённый тест. Последнее важно отдельно: зависший тест — это не «успех».
+pub fn validate(ev: StageEvidence) -> Result<StageVerdict, String> {
+    let faults = crate::bench::gpu_faults_since(ev.started_at);
+
+    let failure = if !ev.completed {
+        Some("тест не доработал до конца".to_string())
+    } else if ev.gpu_mismatches > 0 {
+        Some(format!(
+            "видеокарта вернула неверный результат {} раз — тихая ошибка вычислений",
+            ev.gpu_mismatches
+        ))
+    } else if !faults.is_empty() {
+        Some(format!("видеодрайвер восстанавливался: {}", faults.join(", ")))
+    } else if ev.peak_temp_c.is_some_and(|t| t > TEMP_LIMIT_C) {
+        Some(format!(
+            "температура дошла до {} °C при потолке {} °C",
+            ev.peak_temp_c.unwrap_or_default(),
+            TEMP_LIMIT_C
+        ))
+    } else {
+        None
+    };
+
+    match failure {
+        Some(reason) => {
+            let journal = reject(&reason)?;
+            Ok(StageVerdict { passed: false, reason, faults, journal })
+        }
+        None => {
+            let journal = confirm()?;
+            let reason = match &journal.pending {
+                Some(p) => format!("Ступень пройдена, переходим к проверке: {}", p.stage.label()),
+                None => "Все ступени пройдены, настройка признана проверенной.".to_string(),
+            };
+            Ok(StageVerdict { passed: true, reason, faults, journal })
+        }
+    }
+}
+
 // --- проверка при старте ---------------------------------------------------
 
 #[derive(Serialize, Clone, Debug, Default)]

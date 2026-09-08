@@ -455,7 +455,36 @@ export interface OcApplyReport {
   message: string;
 }
 
+/** Что собрал тест за время ступени. */
+export interface StageEvidence {
+  gpu_mismatches: number;
+  started_at: number;
+  peak_temp_c: number | null;
+  completed: boolean;
+}
+
+export interface StageVerdict {
+  passed: boolean;
+  reason: string;
+  faults: string[];
+  journal: OcJournal;
+}
+
+export interface StressResult {
+  kind: string;
+  seconds: number;
+  threads: number;
+  passes: number;
+  mismatches: number;
+  features: string[];
+  note: string;
+}
+
 export const api = {
+  ocValidate: (evidence: StageEvidence) => invoke<StageVerdict>("oc_validate", { evidence }),
+  benchCpu: (seconds: number, threads = 0) => invoke<StressResult>("bench_cpu", { seconds, threads }),
+  benchMemory: (megabytes: number, seconds: number) => invoke<StressResult>("bench_memory", { megabytes, seconds }),
+  gpuPeakTemp: (samples: number, intervalMs: number) => invoke<number | null>("gpu_peak_temp", { samples, intervalMs }),
   gpuNvapi: () => invoke<GpuNvapi>("gpu_nvapi"),
   gpuCapabilities: () => invoke<GpuCapabilities>("gpu_capabilities"),
   ocState: () => invoke<OcJournal>("oc_state"),

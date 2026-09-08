@@ -3,6 +3,10 @@ import { AreaChart, Area, ResponsiveContainer, YAxis, XAxis, Tooltip, CartesianG
 import { useStore } from "../store";
 import { Section, Tile, Tag, StatusPill, Bar, Label } from "../components/ui";
 import { timeHM, api, type GpuNvapi, type GpuCapabilities, type OcJournal, type GpuCandidate, type OcStage } from "../lib/api";
+import { runGpuTest, type GpuTestProgress } from "../lib/gputest";
+
+/** Длительности ступеней должны совпадать с Stage::seconds в ocsafe.rs. */
+const STAGE_SECONDS: Record<OcStage, number> = { smoke: 30, medium: 300, long: 1800 };
 
 const history: { t: number; util: number; temp: number; power: number }[] = [];
 
@@ -43,7 +47,50 @@ export default function Gpu() {
   const [ocMsg, setOcMsg] = useState<string | null>(null);
   const [ocErr, setOcErr] = useState<string | null>(null);
 
+  const [testing, setTesting] = useState(false);
+  const [progress, setProgress] = useState<GpuTestProgress | null>(null);
+  // Пик температуры набирается из общего опроса NVAPI, чтобы не дёргать драйвер отдельно.
+  const testingRef = useRef(false);
+  const peakRef = useRef<number | null>(null);
+
   const refreshOc = () => api.ocState().then(setOc).catch(() => setOc(null));
+
+  /** Прогоняет нагрузку на время ступени и передаёт улики бэкенду за вердиктом. */
+  const runStage = async () => {
+    if (!oc?.pending) return;
+    const seconds = STAGE_SECONDS[oc.pending.stage] ?? 30;
+    const startedAt = Math.floor(Date.now() / 1000);
+    peakRef.current = nv?.temperatures.find((t) => t.target === "gpu")?.current_c ?? null;
+    testingRef.current = true;
+    setTesting(true);
+    setOcErr(null);
+    setOcMsg(null);
+    setProgress(null);
+    try {
+      const r = await runGpuTest(seconds, setProgress);
+      if (!r.available) {
+        setOcErr(r.reason ?? "WebGPU недоступен");
+        return;
+      }
+      const verdict = await api.ocValidate({
+        gpu_mismatches: r.mismatches,
+        started_at: startedAt,
+        peak_temp_c: peakRef.current,
+        completed: r.completed,
+      });
+      setOc(verdict.journal);
+      setOcMsg(
+        `${verdict.reason} Просчитано ${r.dispatches} проходов${r.reason ? `. ${r.reason}` : ""}` +
+          (verdict.faults.length ? ` Сбои драйвера: ${verdict.faults.join(", ")}.` : ""),
+      );
+    } catch (e) {
+      setOcErr(String(e));
+    } finally {
+      testingRef.current = false;
+      setTesting(false);
+      setProgress(null);
+    }
+  };
 
   useEffect(() => {
     api
@@ -79,7 +126,15 @@ export default function Gpu() {
     const tick = () =>
       api
         .gpuNvapi()
-        .then((v) => alive && (setNv(v), setNvError(null)))
+        .then((v) => {
+          if (!alive) return;
+          setNv(v);
+          setNvError(null);
+          if (testingRef.current) {
+            const t = v.temperatures.find((s) => s.target === "gpu")?.current_c;
+            if (t != null) peakRef.current = Math.max(peakRef.current ?? t, t);
+          }
+        })
         .catch((e) => alive && setNvError(String(e)));
     tick();
     const id = setInterval(tick, 3000);
@@ -321,14 +376,29 @@ export default function Gpu() {
                   </div>
                 </div>
                 <div className="flex gap-2 shrink-0">
-                  <button className="btn" disabled={busy} onClick={() => run(() => api.ocConfirm())}>
-                    Ступень пройдена
+                  <button className="btn" disabled={busy || testing} onClick={runStage}>
+                    {testing
+                      ? `Идёт проверка… ${progress ? `${Math.round(progress.seconds)} с` : ""}`
+                      : `Запустить проверку · ${STAGE_SECONDS[oc.pending.stage] < 60 ? `${STAGE_SECONDS[oc.pending.stage]} с` : `${STAGE_SECONDS[oc.pending.stage] / 60} мин`}`}
                   </button>
-                  <button className="btn" disabled={busy} onClick={() => run(() => api.ocReject("отклонено вручную"))}>
+                  <button className="btn" disabled={busy || testing} onClick={() => run(() => api.ocReject("отклонено вручную"))}>
                     Откатить
                   </button>
                 </div>
               </div>
+              {testing && (
+                <div className="mt-2.5">
+                  <Bar
+                    value={progress?.seconds ?? 0}
+                    max={STAGE_SECONDS[oc.pending.stage] ?? 30}
+                    color={progress && progress.mismatches > 0 ? "var(--color-coral)" : "var(--color-teal)"}
+                  />
+                  <div className="text-[11.5px] text-ink-2 mt-1">
+                    Просчитано {progress?.dispatches ?? 0} проходов, расхождений {progress?.mismatches ?? 0}
+                    {peakRef.current != null && `, пик температуры ${peakRef.current} °C`}
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <div className="flex items-center gap-2 mt-3">

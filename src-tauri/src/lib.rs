@@ -1,5 +1,6 @@
 mod ai;
 mod audio;
+mod bench;
 mod config;
 mod perms;
 mod net;
@@ -200,6 +201,51 @@ fn oc_reject(state: State<'_, Shared>, reason: String) -> Result<ocsafe::Journal
     let r = ocsafe::reject(&reason);
     state.log("warn", format!("Откат разгона: {reason}"));
     r
+}
+
+/// Вердикт по ступени: сводит ошибки вычислений, сбои драйвера и температуру,
+/// после чего сам подтверждает настройку либо откатывает её.
+#[tauri::command]
+async fn oc_validate(
+    state: State<'_, Shared>,
+    evidence: ocsafe::StageEvidence,
+) -> Result<ocsafe::StageVerdict, String> {
+    let st = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let v = ocsafe::validate(evidence);
+        match &v {
+            Ok(r) if r.passed => st.log("info", format!("Проверка разгона: {}", r.reason)),
+            Ok(r) => st.log("warn", format!("Проверка разгона не пройдена: {}", r.reason)),
+            Err(e) => st.log("error", format!("Проверка разгона сорвалась: {e}")),
+        }
+        v
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Нагрузка на процессор со сверкой контрольных сумм.
+#[tauri::command]
+async fn bench_cpu(seconds: u64, threads: usize) -> Result<bench::StressResult, String> {
+    tauri::async_runtime::spawn_blocking(move || bench::cpu_stress(seconds, threads))
+        .await
+        .map_err(err)
+}
+
+/// Проверка памяти записью и чтением цепочки.
+#[tauri::command]
+async fn bench_memory(megabytes: usize, seconds: u64) -> Result<bench::StressResult, String> {
+    tauri::async_runtime::spawn_blocking(move || bench::memory_test(megabytes, seconds))
+        .await
+        .map_err(err)
+}
+
+/// Наибольшая температура видеокарты за короткое наблюдение.
+#[tauri::command]
+async fn gpu_peak_temp(samples: u32, interval_ms: u64) -> Result<Option<i32>, String> {
+    tauri::async_runtime::spawn_blocking(move || bench::gpu_peak_temp(samples, interval_ms))
+        .await
+        .map_err(err)
 }
 
 /// Снять разгон и вернуть карту к штатным значениям.
@@ -1329,7 +1375,11 @@ pub fn run() {
             oc_apply,
             oc_confirm,
             oc_reject,
-            oc_reset
+            oc_reset,
+            oc_validate,
+            bench_cpu,
+            bench_memory,
+            gpu_peak_temp
         ])
         .run(tauri::generate_context!())
         .expect("error while running DotPilot");
