@@ -2,7 +2,16 @@ import { useEffect, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { Section, Tile, Tag, Markdown, StatusPill, Switch } from "../components/ui";
 import { useStore } from "../store";
-import { api, timeHM, type HealthReport, type Finding, type Severity, type TrendReport, type MaintenanceTask } from "../lib/api";
+import {
+  api,
+  timeHM,
+  type HealthReport,
+  type Finding,
+  type Severity,
+  type TrendReport,
+  type MaintenanceTask,
+  type UpdateReport,
+} from "../lib/api";
 
 const SEVERITY: Record<Severity, { label: string; color: string; order: number }> = {
   problem: { label: "требует внимания", color: "var(--color-coral)", order: 0 },
@@ -44,6 +53,22 @@ export default function Health() {
   const [err, setErr] = useState<string | null>(null);
   const [trends, setTrends] = useState<TrendReport | null>(null);
   const [tasks, setTasks] = useState<MaintenanceTask[]>([]);
+  const [updates, setUpdates] = useState<UpdateReport | null>(null);
+
+  const saveHistory = async () => {
+    const stamp = new Date().toISOString().slice(0, 10);
+    const path = await save({ defaultPath: `История-ПК-${stamp}.md`, filters: [{ name: "Markdown", extensions: ["md"] }] });
+    if (!path) return;
+    setBusy("Собираю историю…");
+    try {
+      await api.serviceHistory(path);
+      setMsgOk(`История сохранена: ${path}. Файл можно вставить в заявку или показать мастеру.`);
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
   const cfg = useStore((s) => s.cfg);
   const saveConfig = useStore((s) => s.saveConfig);
 
@@ -94,6 +119,7 @@ export default function Health() {
     check();
     api.trendsReport().then(setTrends).catch(() => setTrends(null));
     api.maintenanceState().then(setTasks).catch(() => setTasks([]));
+    api.updatesReport().then(setUpdates).catch(() => setUpdates(null));
   }, []);
 
   const sorted = report ? [...report.findings].sort((a, b) => SEVERITY[a.severity].order - SEVERITY[b.severity].order) : [];
@@ -234,9 +260,14 @@ export default function Health() {
           title="Обслуживание"
           sub="Тяжёлые проверки не запускаются сами: решать, когда это уместно, должен человек. Планировщик только напоминает."
           right={
-            <button className="btn" disabled={!!busy} onClick={saveReport}>
-              Отчёт о состоянии
-            </button>
+            <div className="flex gap-2">
+              <button className="btn" disabled={!!busy} onClick={saveReport}>
+                Отчёт о состоянии
+              </button>
+              <button className="btn" disabled={!!busy} onClick={saveHistory}>
+                История для мастерской
+              </button>
+            </div>
           }
         >
           <div className="flex flex-col gap-1.5">
@@ -319,6 +350,34 @@ export default function Health() {
           </div>
 
           {msgOk && <div className="text-[12.5px] text-mint mt-2">{msgOk}</div>}
+        </Section>
+      )}
+
+      {updates && (
+        <Section
+          title="Версии драйверов и прошивки"
+          sub="Приложение показывает, что установлено и насколько это старое. Какая версия последняя — оно не знает и не притворяется."
+        >
+          <div className="flex flex-col gap-1.5">
+            {updates.components.map((c, i) => (
+              <div key={i} className="flex items-start gap-2.5 py-1.5">
+                <StatusPill ok={!c.stale} warn={c.stale} text={c.stale ? "стоит проверить" : "свежее"} />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13px]">{c.name}</div>
+                  <div className="text-[11.5px] text-ink-2 mt-0.5">
+                    <span className="num">{c.installed}</span>
+                    {c.date && ` · от ${c.date}`}
+                    {c.age_days != null && ` · это ${c.age_days} дн. назад`}
+                  </div>
+                  <div className="text-[11.5px] text-ink-3 mt-0.5">{c.note}</div>
+                </div>
+                <button className="btn shrink-0" onClick={() => api.openUri(c.check_at)}>
+                  Проверить
+                </button>
+              </div>
+            ))}
+          </div>
+          <div className="text-[11.5px] text-ink-3 mt-3">{updates.disclaimer}</div>
         </Section>
       )}
 

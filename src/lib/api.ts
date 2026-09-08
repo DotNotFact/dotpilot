@@ -781,7 +781,25 @@ export interface BiosPhotoResult {
   output_tokens: number;
 }
 
+/** Версии драйверов и прошивки. */
+export interface UpdateComponent {
+  name: string;
+  installed: string;
+  date: string | null;
+  age_days: number | null;
+  stale: boolean;
+  check_at: string;
+  note: string;
+}
+
+export interface UpdateReport {
+  components: UpdateComponent[];
+  disclaimer: string;
+}
+
 export const api = {
+  updatesReport: () => invoke<UpdateReport>("updates_report"),
+  serviceHistory: (path?: string) => invoke<string>("service_history", { path: path ?? null }),
   biosPhoto: (path: string, expectation: string) => invoke<BiosPhotoResult>("bios_photo", { path, expectation }),
   noiseState: () => invoke<NoiseBudget>("noise_state"),
   noiseEnable: (on: boolean) => invoke<NoiseBudget>("noise_enable", { on }),

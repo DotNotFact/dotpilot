@@ -370,3 +370,151 @@ mod hw_tests {
         assert!(!html.contains("src=\""), "во внешнем файле не должно быть подгружаемых ресурсов");
     }
 }
+
+// --- история для мастерской ------------------------------------------------
+
+/// Хронологическая выжимка для сервисного центра.
+///
+/// Мастерская работает методом подстановки: «попробуем другую планку, попробуем
+/// другой блок». Дорого и долго. Приложение к этому моменту уже месяцами наблюдало
+/// за машиной, и его журнал отвечает на вопросы, ради которых обычно и перебирают
+/// железо: когда началось, при каких условиях, менялось ли что-то перед этим.
+///
+/// Формат — Markdown, а не HTML: текст вставляется в заявку, в переписку и в тикет
+/// без потери смысла, а печатать его никто не будет.
+pub fn service_history_md(cpu_load: f32) -> String {
+    let fw = crate::platform::firmware_info();
+    let mem = crate::platform::memory_config();
+    let health = crate::health::check(cpu_load);
+    let journal = crate::ocsafe::load();
+    let trends = crate::trends::report(0.0);
+    let baselines = crate::platform::load_baselines();
+    let maintenance = crate::maintenance::tasks();
+    let now = chrono::Local::now();
+
+    let stamp = |ts: i64| {
+        chrono::DateTime::from_timestamp(ts, 0)
+            .map(|d| d.with_timezone(&chrono::Local).format("%d.%m.%Y %H:%M").to_string())
+            .unwrap_or_else(|| "—".into())
+    };
+
+    let mut md = String::new();
+    md.push_str(&format!("# История наблюдений за ПК\n\nСоставлено {}\n\n", now.format("%d.%m.%Y %H:%M")));
+
+    md.push_str("## Состав\n\n");
+    md.push_str(&format!("- Процессор: {} ({} ядер / {} потоков)\n", fw.cpu, fw.cores, fw.threads));
+    md.push_str(&format!("- Плата: {}\n", fw.board));
+    md.push_str(&format!("- Прошивка: {} {} от {}\n", fw.bios_vendor, fw.bios_version, fw.bios_date));
+    md.push_str(&format!(
+        "- Память: {:.0} ГБ, профиль {}\n",
+        mem.total_gb,
+        if mem.profile_enabled { "включён" } else { "выключен (базовый JEDEC)" }
+    ));
+    if let Some(g) = crate::nvapi::telemetry() {
+        md.push_str(&format!("- Видеокарта: {}\n", g.name));
+    }
+
+    md.push_str("\n## Что видно сейчас\n\n");
+    md.push_str(&format!("{}\n\n", health.summary));
+    for f in health.findings.iter().filter(|f| {
+        matches!(f.severity, crate::health::Severity::Problem | crate::health::Severity::Warning)
+    }) {
+        md.push_str(&format!("- **{} — {}**: {}\n", f.area, f.title, f.measured));
+    }
+    if health.problems == 0 && health.warnings == 0 {
+        md.push_str("Отклонений от нормы не найдено.\n");
+    }
+
+    // Главная ценность для мастерской: изменилось ли что-то со временем.
+    md.push_str("\n## Динамика\n\n");
+    if trends.cooling.enough_data {
+        md.push_str(&format!(
+            "Наблюдений: {} за {:.1} суток. {}\n\n",
+            trends.samples, trends.span_days, trends.cooling.verdict
+        ));
+        if let Some(d) = trends.cooling.gpu_delta_c {
+            md.push_str(&format!("- Видеокарта при той же мощности: {d:+.1} °C\n"));
+        }
+        if let Some(d) = trends.cooling.cpu_delta_c {
+            md.push_str(&format!("- Процессор при сравнимой загрузке: {d:+.1} °C\n"));
+        }
+        md.push_str(
+            "\nСравнение идёт при одинаковой потребляемой мощности: рост температуры \
+             при неизменном тепловыделении означает ухудшение отвода тепла.\n",
+        );
+    } else {
+        md.push_str(&format!("Данных для вывода о динамике пока мало: {}\n", trends.cooling.verdict));
+    }
+
+    if !baselines.items.is_empty() {
+        md.push_str("\n## Замеры производительности\n\n");
+        md.push_str("| Когда | Повод | Процессор, проходов/с | Память, МБ/с | Частота под нагрузкой | Ошибки |\n");
+        md.push_str("|---|---|---|---|---|---|\n");
+        for b in baselines.items.iter().rev().take(10) {
+            md.push_str(&format!(
+                "| {} | {} | {:.0} | {:.0} | {} | {} |\n",
+                stamp(b.at),
+                b.label,
+                b.cpu_passes_per_sec,
+                b.memory_mb_per_sec,
+                b.loaded_clock_mhz.map(|c| format!("{c:.0} МГц")).unwrap_or("—".into()),
+                if b.cpu_mismatches + b.memory_mismatches == 0 {
+                    "нет".to_string()
+                } else {
+                    format!("процессор {}, память {}", b.cpu_mismatches, b.memory_mismatches)
+                }
+            ));
+        }
+    }
+
+    // Отклонённые настройки — прямая улика: они говорят, при каких значениях
+    // машина теряла стабильность.
+    if !journal.rejected.is_empty() {
+        md.push_str("\n## Настройки, на которых терялась стабильность\n\n");
+        for r in journal.rejected.iter().rev().take(15) {
+            md.push_str(&format!(
+                "- {} — ядро {:+} МГц, память {:+} МГц, мощность {:.0} %: {}\n",
+                stamp(r.at),
+                r.candidate.core_offset_mhz,
+                r.candidate.mem_offset_mhz,
+                r.candidate.power_percent,
+                r.reason
+            ));
+        }
+    }
+
+    if let Some(good) = journal.last_known_good {
+        md.push_str(&format!(
+            "\nПоследняя проверенная настройка: ядро {:+} МГц, память {:+} МГц, мощность {:.0} %.\n",
+            good.core_offset_mhz, good.mem_offset_mhz, good.power_percent
+        ));
+    }
+
+    if !journal.history.is_empty() {
+        md.push_str("\n## Хронология вмешательств\n\n");
+        for e in journal.history.iter().rev().take(40) {
+            md.push_str(&format!("- {} · {}\n", stamp(e.at), e.text));
+        }
+    }
+
+    let done: Vec<_> = maintenance.iter().filter(|t| t.last_run.is_some()).collect();
+    if !done.is_empty() {
+        md.push_str("\n## Обслуживание\n\n");
+        for t in done {
+            md.push_str(&format!(
+                "- {}: последний раз {}\n",
+                t.name,
+                t.last_run.map(stamp).unwrap_or_else(|| "—".into())
+            ));
+        }
+    }
+
+    md.push_str(
+        "\n---\n\n\
+         Отчёт собран приложением DotPilot на самой машине. Данные о накопителях взяты из SMART, \
+         аппаратные ошибки — из журнала Windows, температуры — с датчиков платы и видеокарты. \
+         Это наблюдения, а не заключение специалиста: выводы о причине неисправности здесь \
+         сознательно не делаются.\n",
+    );
+    md
+}

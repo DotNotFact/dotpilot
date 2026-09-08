@@ -22,6 +22,7 @@ mod services;
 mod sysmon;
 mod tray;
 mod trends;
+mod updates;
 mod voltage;
 
 use config::Config;
@@ -377,6 +378,29 @@ async fn notify_test(state: State<'_, Shared>) -> Result<maintenance::NotifyResu
     let cfg = state.cfg();
     tauri::async_runtime::spawn_blocking(move || {
         maintenance::send(&cfg, "DotPilot: проверка связи. Если вы это видите, уведомления настроены.")
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Версии драйверов и прошивки: что стоит и насколько это старое.
+#[tauri::command]
+async fn updates_report() -> Result<updates::UpdateReport, String> {
+    tauri::async_runtime::spawn_blocking(updates::report).await.map_err(err)
+}
+
+/// История наблюдений для мастерской одним файлом Markdown.
+#[tauri::command]
+async fn service_history(state: State<'_, Shared>, path: Option<String>) -> Result<String, String> {
+    let st = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let load = st.snap.lock().unwrap().cpu.usage;
+        let md = report::service_history_md(load);
+        if let Some(p) = &path {
+            std::fs::write(p, &md).map_err(err)?;
+            st.log("info", format!("История для мастерской сохранена: {p}"));
+        }
+        Ok(md)
     })
     .await
     .map_err(err)?
@@ -1935,6 +1959,8 @@ pub fn run() {
             maintenance_done,
             notify_test,
             hardware_report,
+            updates_report,
+            service_history,
             anticheat_status,
             anticheat_set_mode,
             fans_state,
