@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { api, type Config, type Snapshot } from "./lib/api";
 
-export type Page = "dashboard" | "network" | "audio" | "processes" | "impact" | "profiles" | "cpu" | "gpu" | "fans" | "ai" | "access" | "settings";
+export type Page = "dashboard" | "health" | "network" | "audio" | "processes" | "impact" | "profiles" | "cpu" | "gpu" | "fans" | "ai" | "access" | "settings";
 
 export interface Toast {
   id: number;

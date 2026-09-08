@@ -3,6 +3,7 @@ mod audio;
 mod bench;
 mod config;
 mod fanctl;
+mod health;
 mod perms;
 mod net;
 mod nvapi;
@@ -253,6 +254,36 @@ async fn oc_propose(state: State<'_, Shared>, note: String) -> Result<ocloop::Su
                 Err(err(e))
             }
         }
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Оценка состояния ПК: что измерено, что считается нормой и где расхождение.
+#[tauri::command]
+async fn health_check(state: State<'_, Shared>) -> Result<health::HealthReport, String> {
+    let st = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        // Температуру процессора нельзя судить без контекста нагрузки.
+        let load = st.snap.lock().unwrap().cpu.usage;
+        let r = health::check(load);
+        st.log(
+            if r.problems > 0 { "warn" } else { "info" },
+            format!("Проверка состояния: {}", r.summary),
+        );
+        r
+    })
+    .await
+    .map_err(err)
+}
+
+/// Второе мнение Claude по отчёту о состоянии.
+#[tauri::command]
+async fn health_advice(state: State<'_, Shared>, report: serde_json::Value) -> Result<String, String> {
+    let st = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let cfg = st.cfg();
+        ocloop::advise_health(&cfg, &report).map_err(err)
     })
     .await
     .map_err(err)?
@@ -1573,6 +1604,8 @@ pub fn run() {
             platform_measure,
             platform_baselines,
             bios_advice,
+            health_check,
+            health_advice,
             fans_state,
             fans_set_limits,
             fans_set_zero,

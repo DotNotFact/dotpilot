@@ -210,6 +210,85 @@ fn parse_suggestion(v: &Value, fallback_model: &str, bounds: ocsafe::Bounds) -> 
     })
 }
 
+// --- второе мнение по состоянию ПК -----------------------------------------
+
+const HEALTH_SYSTEM_PROMPT: &str = "Ты — инженер по железу ПК. Тебе дают результат автоматической проверки: что измерено и с какой нормой сравнено.
+
+Твоя задача — дать второе мнение и контекст, которого нет в жёстко зашитых порогах:
+
+- Подтверди или оспорь выводы. Если порог в программе слишком строгий или слишком мягкий для этой конкретной модели — скажи прямо.
+- Сравни с тем, что обычно у владельцев такой же связки: та же модель процессора, видеокарты, платы.
+- Расставь приоритеты: что действительно стоит делать, а что можно спокойно игнорировать.
+- Назови то, чего проверка не увидела, но что стоит посмотреть при таких показаниях.
+
+Не пересказывай измерения обратно — владелец их уже видит. Пиши по-русски, коротко, без списков ради списков. Используй Markdown. Не выдумывай данных, которых нет в отчёте.";
+
+/// Свободный комментарий модели к отчёту о состоянии.
+///
+/// Здесь намеренно нет tool-use: от модели нужен связный разбор, а не структура
+/// для машины, и любые её выводы носят рекомендательный характер — ничего
+/// автоматически не применяется.
+pub fn advise_health(cfg: &Config, report: &Value) -> Result<String> {
+    if cfg.anthropic_api_key.trim().is_empty() {
+        return Err(anyhow!("Не задан API-ключ Anthropic. Открой «Настройки» и вставь ключ."));
+    }
+    let mut builder = reqwest::blocking::Client::builder().timeout(Duration::from_secs(300));
+    if !cfg.ai_proxy.trim().is_empty() {
+        builder = builder.proxy(reqwest::Proxy::all(cfg.ai_proxy.trim())?);
+    }
+    let client = builder.build()?;
+
+    let ctx = json!({
+        "прошивка": crate::platform::firmware_info(),
+        "память": crate::platform::memory_config(),
+        "видеокарта": crate::nvapi::telemetry(),
+        "отчёт_проверки": report,
+    });
+
+    let body = json!({
+        "model": cfg.ai_model,
+        "max_tokens": 4000,
+        "system": HEALTH_SYSTEM_PROMPT,
+        "thinking": { "type": "adaptive" },
+        "output_config": { "effort": cfg.ai_effort },
+        "fallbacks": "default",
+        "messages": [ { "role": "user", "content":
+            format!("Вот результат проверки моего ПК. Дай второе мнение.\n\n<отчёт>\n{}\n</отчёт>",
+                    serde_json::to_string_pretty(&ctx)?) } ]
+    });
+
+    let resp = client
+        .post("https://api.anthropic.com/v1/messages")
+        .header("content-type", "application/json")
+        .header("x-api-key", cfg.anthropic_api_key.trim())
+        .header("anthropic-version", "2023-06-01")
+        .header("anthropic-beta", "server-side-fallback-2026-07-01")
+        .json(&body)
+        .send()?;
+
+    let status = resp.status();
+    let text = resp.text()?;
+    let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+    if !status.is_success() {
+        let msg = v.pointer("/error/message").and_then(|m| m.as_str()).unwrap_or(&text).to_string();
+        return Err(anyhow!("API {}: {}", status.as_u16(), msg));
+    }
+    let mut out = String::new();
+    if let Some(blocks) = v.get("content").and_then(|c| c.as_array()) {
+        for b in blocks {
+            if b.get("type").and_then(|t| t.as_str()) == Some("text") {
+                if let Some(t) = b.get("text").and_then(|t| t.as_str()) {
+                    out.push_str(t);
+                }
+            }
+        }
+    }
+    if out.trim().is_empty() {
+        return Err(anyhow!("Пустой ответ от API."));
+    }
+    Ok(out)
+}
+
 // --- советник по BIOS ------------------------------------------------------
 
 const BIOS_SYSTEM_PROMPT: &str = "Ты — инженер по настройке платформ AMD AM5. Владелец собирается менять параметры в BIOS сам, а приложение снимает замеры до и после и проверяет стабильность встроенными тестами.

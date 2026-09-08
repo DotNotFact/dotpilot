@@ -12,6 +12,7 @@ import {
   Sparkles,
   KeyRound,
   Settings,
+  Stethoscope,
   ShieldCheck,
   ShieldAlert,
 } from "lucide-react";
@@ -28,6 +29,7 @@ const groups: { title: string; items: Item[] }[] = [
     title: "Обзор",
     items: [
       { id: "dashboard", label: "Главная", icon: <LayoutDashboard size={17} />, hint: "Состояние сети и ПК одним взглядом: пинг, потери, Wi-Fi, карта маршрутов, экспорт данных." },
+      { id: "health", label: "Здоровье ПК", icon: <Stethoscope size={17} />, hint: "Что измерено, что считается нормой для этого железа и где расхождение: температуры, память, диски, аппаратные ошибки." },
     ],
   },
   {

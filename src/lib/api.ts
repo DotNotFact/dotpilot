@@ -601,7 +601,29 @@ export interface FanControllerState {
   note: string;
 }
 
+/** Оценка состояния ПК: измерение, норма и расхождение. */
+export type Severity = "ok" | "notice" | "warning" | "problem";
+
+export interface Finding {
+  area: string;
+  title: string;
+  severity: Severity;
+  measured: string;
+  reference: string;
+  advice: string | null;
+}
+
+export interface HealthReport {
+  at: number;
+  findings: Finding[];
+  problems: number;
+  warnings: number;
+  summary: string;
+}
+
 export const api = {
+  healthCheck: () => invoke<HealthReport>("health_check"),
+  healthAdvice: (report: HealthReport) => invoke<string>("health_advice", { report }),
   fansState: () => invoke<FanControllerState>("fans_state"),
   fansSetLimits: (id: number, offC: number, onC: number) => invoke<[number, number]>("fans_set_limits", { id, offC, onC }),
   fansSetZero: (id: number, enabled: boolean) => invoke<void>("fans_set_zero", { id, enabled }),

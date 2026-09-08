@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useStore, type Page, type Toast } from "./store";
 import Sidebar from "./components/Sidebar";
 import Dashboard from "./pages/Dashboard";
+import Health from "./pages/Health";
 import Network from "./pages/Network";
 import Profiles from "./pages/Profiles";
 import Cpu from "./pages/Cpu";
@@ -18,7 +19,7 @@ import { X, Copy, ChevronDown, ChevronUp } from "lucide-react";
 
 /// Порядок должен совпадать с порядком пунктов в сайдбаре: Ctrl+1…9 и Ctrl+0
 /// выбирают страницу по этому списку, и рассинхрон превратит подсказки в ложь.
-export const PAGES: Page[] = ["dashboard", "cpu", "gpu", "fans", "network", "audio", "processes", "profiles", "ai", "impact", "access", "settings"];
+export const PAGES: Page[] = ["dashboard", "health", "cpu", "gpu", "fans", "network", "audio", "processes", "profiles", "ai", "impact", "access", "settings"];
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
   state = { error: null as string | null };
@@ -90,6 +91,7 @@ export default function App() {
         <div className="px-7 py-6 w-full max-w-[1900px] mx-auto">
           <ErrorBoundary key={page}>
             {page === "dashboard" && <Dashboard />}
+            {page === "health" && <Health />}
             {page === "network" && <Network />}
             {page === "audio" && <Audio />}
             {page === "processes" && <Processes />}
