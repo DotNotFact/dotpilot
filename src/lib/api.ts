@@ -53,6 +53,8 @@ export interface Config {
   ai_proxy: string;
   ai_effort: string;
   poll_ms: number;
+  /** Цена киловатт-часа для подсчёта стоимости энергии. */
+  power_tariff: number;
   tg_exe: string;
   tgws_exe: string;
   tgws_autostart: boolean;
@@ -645,7 +647,33 @@ export interface VoltageState {
   note: string;
 }
 
+/** Долгие наблюдения: деградация охлаждения и расход электричества. */
+export interface CoolingTrend {
+  enough_data: boolean;
+  gpu_delta_c: number | null;
+  cpu_delta_c: number | null;
+  compared: number;
+  verdict: string;
+}
+
+export interface EnergyReport {
+  gpu_kwh: number;
+  gpu_cost: number;
+  tariff: number;
+  span_days: number;
+  avg_watts: number;
+  note: string;
+}
+
+export interface TrendReport {
+  samples: number;
+  span_days: number;
+  cooling: CoolingTrend;
+  energy: EnergyReport;
+}
+
 export const api = {
+  trendsReport: () => invoke<TrendReport>("trends_report"),
   voltageState: () => invoke<VoltageState>("voltage_state"),
   voltageSetOffset: (id: number, millivolts: number) => invoke<number>("voltage_set_offset", { id, millivolts }),
   voltageReset: () => invoke<void>("voltage_reset"),

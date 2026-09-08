@@ -17,6 +17,7 @@ mod report;
 mod services;
 mod sysmon;
 mod tray;
+mod trends;
 mod voltage;
 
 use config::Config;
@@ -258,6 +259,15 @@ async fn oc_propose(state: State<'_, Shared>, note: String) -> Result<ocloop::Su
     })
     .await
     .map_err(err)?
+}
+
+/// Долгие наблюдения: деградация охлаждения и расход электричества.
+#[tauri::command]
+async fn trends_report(state: State<'_, Shared>) -> Result<trends::TrendReport, String> {
+    let tariff = state.cfg().power_tariff;
+    tauri::async_runtime::spawn_blocking(move || trends::report(tariff))
+        .await
+        .map_err(err)
 }
 
 /// Регуляторы напряжения, которые отдаёт ACPI-интерфейс платы.
@@ -605,6 +615,9 @@ fn collector(app: tauri::AppHandle, st: Shared) {
                 }
             }
             cached_gpu = sysmon::gpu();
+            // Образец для долгих наблюдений. Модуль сам ограничивает частоту записи,
+            // поэтому вызывать его на каждом медленном цикле безопасно.
+            trends::maybe_record(&cached_gpu, cpu.usage);
             if !hidden {
                 cached_wifi = net::wifi_info().unwrap_or_default();
             }
@@ -1648,6 +1661,7 @@ pub fn run() {
             voltage_state,
             voltage_set_offset,
             voltage_reset,
+            trends_report,
             fans_state,
             fans_set_limits,
             fans_set_zero,

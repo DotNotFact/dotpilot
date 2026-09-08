@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Section, Tile, Tag, Markdown } from "../components/ui";
-import { api, timeHM, type HealthReport, type Finding, type Severity } from "../lib/api";
+import { useStore } from "../store";
+import { api, timeHM, type HealthReport, type Finding, type Severity, type TrendReport } from "../lib/api";
 
 const SEVERITY: Record<Severity, { label: string; color: string; order: number }> = {
   problem: { label: "требует внимания", color: "var(--color-coral)", order: 0 },
@@ -40,6 +41,9 @@ export default function Health() {
   const [advice, setAdvice] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [trends, setTrends] = useState<TrendReport | null>(null);
+  const cfg = useStore((s) => s.cfg);
+  const saveConfig = useStore((s) => s.saveConfig);
 
   const check = async () => {
     setBusy("Идёт проверка: датчики, диски, журнал аппаратных ошибок…");
@@ -69,6 +73,7 @@ export default function Health() {
 
   useEffect(() => {
     check();
+    api.trendsReport().then(setTrends).catch(() => setTrends(null));
   }, []);
 
   const sorted = report ? [...report.findings].sort((a, b) => SEVERITY[a.severity].order - SEVERITY[b.severity].order) : [];
@@ -120,6 +125,88 @@ export default function Health() {
             </div>
           </Section>
         </>
+      )}
+
+      {trends && (
+        <Section
+          title="Наблюдения во времени"
+          sub="Отвечает не на «что сейчас», а на «что меняется». Данные копятся, пока приложение работает."
+          right={<Tag>{trends.samples} образцов за {trends.span_days.toFixed(1)} сут</Tag>}
+        >
+          <div className="grid grid-cols-2 gap-3">
+            <div className="panel-2 px-3.5 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-[13px]">Охлаждение</div>
+                {trends.cooling.enough_data ? (
+                  <Tag color={(trends.cooling.gpu_delta_c ?? 0) > 5 ? "var(--color-amber)" : "var(--color-mint)"}>
+                    {trends.cooling.compared} замеров
+                  </Tag>
+                ) : (
+                  <Tag>копим данные</Tag>
+                )}
+              </div>
+              {trends.cooling.enough_data && (
+                <div className="flex gap-4 mt-2">
+                  {trends.cooling.gpu_delta_c != null && (
+                    <div>
+                      <div className="eyebrow">Видеокарта</div>
+                      <div className="num text-[20px]" style={{ color: trends.cooling.gpu_delta_c > 1.5 ? "var(--color-amber)" : "var(--color-mint)" }}>
+                        {trends.cooling.gpu_delta_c > 0 ? "+" : ""}
+                        {trends.cooling.gpu_delta_c.toFixed(1)} °C
+                      </div>
+                    </div>
+                  )}
+                  {trends.cooling.cpu_delta_c != null && (
+                    <div>
+                      <div className="eyebrow">Процессор</div>
+                      <div className="num text-[20px]" style={{ color: trends.cooling.cpu_delta_c > 1.5 ? "var(--color-amber)" : "var(--color-mint)" }}>
+                        {trends.cooling.cpu_delta_c > 0 ? "+" : ""}
+                        {trends.cooling.cpu_delta_c.toFixed(1)} °C
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+              <div className="text-[12px] text-ink-2 mt-1.5">{trends.cooling.verdict}</div>
+              <div className="text-[11.5px] text-ink-3 mt-1">
+                Сравнивается температура при одинаковой потребляемой мощности. Рост оборотов сам по себе ни о чём не
+                говорит: при фиксированной кривой они и так следуют за температурой.
+              </div>
+            </div>
+
+            <div className="panel-2 px-3.5 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-[13px]">Электричество</div>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    className="input num w-20"
+                    type="number"
+                    min={0}
+                    step={0.5}
+                    value={cfg?.power_tariff ?? trends.energy.tariff}
+                    onChange={(e) => cfg && saveConfig({ ...cfg, power_tariff: Number(e.target.value) })}
+                  />
+                  <span className="text-[11.5px] text-ink-3">₽/кВт·ч</span>
+                </div>
+              </div>
+              <div className="flex gap-4 mt-2">
+                <div>
+                  <div className="eyebrow">Израсходовано</div>
+                  <div className="num text-[20px]">{trends.energy.gpu_kwh.toFixed(2)} <span className="text-[11.5px] text-ink-3">кВт·ч</span></div>
+                </div>
+                <div>
+                  <div className="eyebrow">Это стоило</div>
+                  <div className="num text-[20px] text-amber">{trends.energy.gpu_cost.toFixed(0)} <span className="text-[11.5px] text-ink-3">₽</span></div>
+                </div>
+                <div>
+                  <div className="eyebrow">В среднем</div>
+                  <div className="num text-[20px]">{trends.energy.avg_watts.toFixed(0)} <span className="text-[11.5px] text-ink-3">Вт</span></div>
+                </div>
+              </div>
+              <div className="text-[11.5px] text-ink-3 mt-1.5">{trends.energy.note}</div>
+            </div>
+          </div>
+        </Section>
       )}
 
       {advice && (

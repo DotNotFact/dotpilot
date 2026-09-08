@@ -11,5 +11,6 @@ DotPilot.exe
 DotPilot.config.json
 DotPilot.oc.json
 DotPilot.baselines.json
+DotPilot.trends.json
 *.json.tmp
 

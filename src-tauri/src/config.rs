@@ -73,6 +73,9 @@ pub struct Config {
     pub ai_proxy: String,
     pub ai_effort: String,
     pub poll_ms: u64,
+    /// Цена киловатт-часа для подсчёта стоимости потреблённой энергии.
+    #[serde(default = "default_tariff")]
+    pub power_tariff: f64,
     /// Telegram Desktop exe.
     pub tg_exe: String,
     /// Local proxy helper for Telegram (TgWsProxy) and whether DotPilot starts it at launch.
@@ -192,6 +195,7 @@ impl Default for Config {
             ai_proxy: "http://127.0.0.1:10809".into(),
             ai_effort: "medium".into(),
             poll_ms: 3000,
+            power_tariff: default_tariff(),
             tg_exe: "D:\\Application\\Telegram Desktop\\Telegram.exe".into(),
             tgws_exe: "D:\\DotNotFact\\Desktop\\TgWsProxy_windows.exe".into(),
             tgws_autostart: false,
@@ -273,4 +277,10 @@ pub fn save(cfg: &Config) -> anyhow::Result<()> {
     let s = serde_json::to_string_pretty(cfg)?;
     std::fs::write(config_path(), s)?;
     Ok(())
+}
+
+/// Средняя бытовая цена киловатт-часа. Значение только чтобы поле не было пустым:
+/// тариф сильно различается по регионам и меняется, поэтому его задаёт пользователь.
+fn default_tariff() -> f64 {
+    5.0
 }
