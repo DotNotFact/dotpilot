@@ -10,5 +10,6 @@ DotPilot.exe
 # локальное состояние: конфиг хранит API-ключ Anthropic в открытом виде
 DotPilot.config.json
 DotPilot.oc.json
+DotPilot.baselines.json
 *.json.tmp
 
