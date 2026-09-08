@@ -480,7 +480,30 @@ export interface StressResult {
   note: string;
 }
 
+/** Предложение модели в сыром виде, до обрезки коридором. */
+export interface OcProposal {
+  core_offset_mhz: number;
+  mem_offset_mhz: number;
+  power_percent: number;
+  fan_level: number | null;
+  reasoning: string;
+  expectation: string;
+  stop: boolean;
+  confidence?: string | null;
+}
+
+export interface OcSuggestion {
+  proposal: OcProposal;
+  /** То, во что предложение превратилось после обрезки. */
+  candidate: GpuCandidate;
+  clamped: boolean;
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+}
+
 export const api = {
+  ocPropose: (note = "") => invoke<OcSuggestion>("oc_propose", { note }),
   ocValidate: (evidence: StageEvidence) => invoke<StageVerdict>("oc_validate", { evidence }),
   benchCpu: (seconds: number, threads = 0) => invoke<StressResult>("bench_cpu", { seconds, threads }),
   benchMemory: (megabytes: number, seconds: number) => invoke<StressResult>("bench_memory", { megabytes, seconds }),

@@ -5,6 +5,7 @@ mod config;
 mod perms;
 mod net;
 mod nvapi;
+mod ocloop;
 mod ocsafe;
 mod ping;
 mod policy;
@@ -219,6 +220,37 @@ async fn oc_validate(
             Err(e) => st.log("error", format!("Проверка разгона сорвалась: {e}")),
         }
         v
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Спросить у Claude следующий шаг подбора. Предложение возвращается уже
+/// обрезанным по коридору — применять его или нет, решает вызывающий.
+#[tauri::command]
+async fn oc_propose(state: State<'_, Shared>, note: String) -> Result<ocloop::Suggestion, String> {
+    let st = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let cfg = st.cfg();
+        match ocloop::propose(&cfg, &note) {
+            Ok(s) => {
+                st.log(
+                    "info",
+                    format!(
+                        "Claude предложил: ядро {:+} МГц, память {:+} МГц, мощность {:.0} %{}",
+                        s.candidate.core_offset_mhz,
+                        s.candidate.mem_offset_mhz,
+                        s.candidate.power_percent,
+                        if s.clamped { " (урезано до коридора)" } else { "" }
+                    ),
+                );
+                Ok(s)
+            }
+            Err(e) => {
+                st.log("error", format!("Claude не смог предложить шаг: {e}"));
+                Err(err(e))
+            }
+        }
     })
     .await
     .map_err(err)?
@@ -1379,7 +1411,8 @@ pub fn run() {
             oc_validate,
             bench_cpu,
             bench_memory,
-            gpu_peak_temp
+            gpu_peak_temp,
+            oc_propose
         ])
         .run(tauri::generate_context!())
         .expect("error while running DotPilot");

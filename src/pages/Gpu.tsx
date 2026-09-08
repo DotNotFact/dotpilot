@@ -2,7 +2,17 @@ import { useEffect, useRef, useState } from "react";
 import { AreaChart, Area, ResponsiveContainer, YAxis, XAxis, Tooltip, CartesianGrid } from "recharts";
 import { useStore } from "../store";
 import { Section, Tile, Tag, StatusPill, Bar, Label } from "../components/ui";
-import { timeHM, api, type GpuNvapi, type GpuCapabilities, type OcJournal, type GpuCandidate, type OcStage } from "../lib/api";
+import {
+  timeHM,
+  api,
+  type GpuNvapi,
+  type GpuCapabilities,
+  type OcJournal,
+  type GpuCandidate,
+  type OcStage,
+  type OcSuggestion,
+  type StageVerdict,
+} from "../lib/api";
 import { runGpuTest, type GpuTestProgress } from "../lib/gputest";
 
 /** Длительности ступеней должны совпадать с Stage::seconds в ocsafe.rs. */
@@ -49,16 +59,19 @@ export default function Gpu() {
 
   const [testing, setTesting] = useState(false);
   const [progress, setProgress] = useState<GpuTestProgress | null>(null);
+  const [auto, setAuto] = useState(false);
+  const [suggestion, setSuggestion] = useState<OcSuggestion | null>(null);
   // Пик температуры набирается из общего опроса NVAPI, чтобы не дёргать драйвер отдельно.
   const testingRef = useRef(false);
   const peakRef = useRef<number | null>(null);
+  const autoRef = useRef(false);
+  const abortRef = useRef<AbortController | null>(null);
 
   const refreshOc = () => api.ocState().then(setOc).catch(() => setOc(null));
 
   /** Прогоняет нагрузку на время ступени и передаёт улики бэкенду за вердиктом. */
-  const runStage = async () => {
-    if (!oc?.pending) return;
-    const seconds = STAGE_SECONDS[oc.pending.stage] ?? 30;
+  const runStageFor = async (stage: OcStage): Promise<StageVerdict | null> => {
+    const seconds = STAGE_SECONDS[stage] ?? 30;
     const startedAt = Math.floor(Date.now() / 1000);
     peakRef.current = nv?.temperatures.find((t) => t.target === "gpu")?.current_c ?? null;
     testingRef.current = true;
@@ -67,10 +80,10 @@ export default function Gpu() {
     setOcMsg(null);
     setProgress(null);
     try {
-      const r = await runGpuTest(seconds, setProgress);
+      const r = await runGpuTest(seconds, setProgress, abortRef.current?.signal);
       if (!r.available) {
         setOcErr(r.reason ?? "WebGPU недоступен");
-        return;
+        return null;
       }
       const verdict = await api.ocValidate({
         gpu_mismatches: r.mismatches,
@@ -83,12 +96,67 @@ export default function Gpu() {
         `${verdict.reason} Просчитано ${r.dispatches} проходов${r.reason ? `. ${r.reason}` : ""}` +
           (verdict.faults.length ? ` Сбои драйвера: ${verdict.faults.join(", ")}.` : ""),
       );
+      return verdict;
     } catch (e) {
       setOcErr(String(e));
+      return null;
     } finally {
       testingRef.current = false;
       setTesting(false);
       setProgress(null);
+    }
+  };
+
+  const runStage = async () => {
+    if (oc?.pending) await runStageFor(oc.pending.stage);
+  };
+
+  /**
+   * Автоподбор: спросить шаг → применить → прогнать ступень → вернуть исход
+   * модели следующим сообщением. Останавливается по кнопке, по решению модели
+   * или по ошибке — молча крутиться в пустоту петля не должна.
+   */
+  const autoLoop = async () => {
+    if (autoRef.current) {
+      autoRef.current = false;
+      abortRef.current?.abort();
+      return;
+    }
+    autoRef.current = true;
+    setAuto(true);
+    abortRef.current = new AbortController();
+    let note = "";
+    try {
+      while (autoRef.current) {
+        let journal = await api.ocState();
+
+        if (!journal.pending) {
+          const s = await api.ocPropose(note);
+          setSuggestion(s);
+          if (s.proposal.stop) {
+            setOcMsg(`Подбор закончен по решению модели: ${s.proposal.reasoning}`);
+            break;
+          }
+          await api.ocApply(s.candidate, "smoke");
+          journal = await api.ocState();
+          setOc(journal);
+        }
+
+        if (!journal.pending) break;
+        const verdict = await runStageFor(journal.pending.stage);
+        if (!verdict) break; // ошибка теста уже показана
+        note = verdict.passed
+          ? `Предыдущий шаг прошёл проверку: ${verdict.reason}`
+          : `Предыдущий шаг откачен: ${verdict.reason}`;
+        if (!autoRef.current) break;
+      }
+    } catch (e) {
+      setOcErr(String(e));
+    } finally {
+      autoRef.current = false;
+      setAuto(false);
+      abortRef.current = null;
+      await refreshOc();
     }
   };
 
@@ -415,6 +483,69 @@ export default function Gpu() {
               <button className="btn ml-auto" disabled={busy} onClick={() => run(() => api.ocReset())}>
                 Снять разгон
               </button>
+            </div>
+          )}
+
+          <div className="flex items-center gap-2 mt-2">
+            <button className="btn" disabled={busy || (testing && !auto)} onClick={autoLoop}>
+              {auto ? "Остановить автоподбор" : "Автоподбор с Claude"}
+            </button>
+            <button
+              className="btn"
+              disabled={busy || auto || testing || !!oc.pending}
+              onClick={() => run(async () => setSuggestion(await api.ocPropose("")))}
+            >
+              Спросить один шаг
+            </button>
+            <span className="text-[11.5px] text-ink-2">
+              Модель предлагает, коридор решает: предложение обрезается границами до записи в драйвер.
+            </span>
+          </div>
+
+          {suggestion && (
+            <div className="panel-2 px-3.5 py-3 mt-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-[13px]">
+                    Предложение: ядро {suggestion.candidate.core_offset_mhz > 0 ? "+" : ""}
+                    {suggestion.candidate.core_offset_mhz} МГц, память {suggestion.candidate.mem_offset_mhz > 0 ? "+" : ""}
+                    {suggestion.candidate.mem_offset_mhz} МГц, мощность {suggestion.candidate.power_percent.toFixed(0)} %
+                    {suggestion.candidate.fan_level != null && `, вентиляторы ${suggestion.candidate.fan_level} %`}
+                  </div>
+                  <div className="text-[12px] text-ink-2 mt-1">{suggestion.proposal.reasoning}</div>
+                  <div className="text-[12px] text-ink-2 mt-1">
+                    <span className="text-ink-3">Ожидание: </span>
+                    {suggestion.proposal.expectation}
+                  </div>
+                </div>
+                <div className="flex flex-col items-end gap-1 shrink-0">
+                  {suggestion.proposal.stop && <Tag color="var(--color-amber)">модель предлагает остановиться</Tag>}
+                  {suggestion.clamped && <Tag color="var(--color-amber)">урезано коридором</Tag>}
+                  {suggestion.proposal.confidence && <Tag>уверенность: {suggestion.proposal.confidence}</Tag>}
+                </div>
+              </div>
+              {suggestion.clamped && (
+                <div className="text-[11.5px] text-ink-2 mt-1.5">
+                  Модель просила ядро {suggestion.proposal.core_offset_mhz > 0 ? "+" : ""}
+                  {suggestion.proposal.core_offset_mhz} МГц, память {suggestion.proposal.mem_offset_mhz > 0 ? "+" : ""}
+                  {suggestion.proposal.mem_offset_mhz} МГц, мощность {suggestion.proposal.power_percent.toFixed(0)} % — значения приведены в коридор.
+                </div>
+              )}
+              <div className="flex items-center gap-2 mt-2.5">
+                <button
+                  className="btn"
+                  disabled={busy || auto || testing || !!oc.pending || suggestion.proposal.stop}
+                  onClick={() => run(async () => setOcMsg((await api.ocApply(suggestion.candidate, "smoke")).message))}
+                >
+                  Применить предложение
+                </button>
+                <button className="btn" disabled={busy || auto} onClick={() => setSuggestion(null)}>
+                  Отклонить
+                </button>
+                <span className="text-[11.5px] text-ink-3 ml-auto">
+                  {suggestion.model} · {suggestion.input_tokens} вход / {suggestion.output_tokens} выход
+                </span>
+              </div>
             </div>
           )}
 
