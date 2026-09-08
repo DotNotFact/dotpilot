@@ -17,6 +17,7 @@ mod report;
 mod services;
 mod sysmon;
 mod tray;
+mod voltage;
 
 use config::Config;
 use serde::Serialize;
@@ -254,6 +255,44 @@ async fn oc_propose(state: State<'_, Shared>, note: String) -> Result<ocloop::Su
                 Err(err(e))
             }
         }
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Регуляторы напряжения, которые отдаёт ACPI-интерфейс платы.
+#[tauri::command]
+async fn voltage_state() -> Result<voltage::VoltageState, String> {
+    tauri::async_runtime::spawn_blocking(voltage::read_state).await.map_err(err)
+}
+
+/// Смещение напряжения. Возвращает фактически применённое значение после обрезки.
+#[tauri::command]
+async fn voltage_set_offset(state: State<'_, Shared>, id: i32, millivolts: i32) -> Result<i32, String> {
+    let st = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let r = voltage::set_offset(id, millivolts);
+        match &r {
+            Ok(v) => st.log("warn", format!("Экспериментально: смещение напряжения {id} = {v} мВ")),
+            Err(e) => st.log("error", format!("Смещение напряжения не применено: {e}")),
+        }
+        r
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Вернуть все смещения напряжения к нулю.
+#[tauri::command]
+async fn voltage_reset(state: State<'_, Shared>) -> Result<(), String> {
+    let st = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let r = voltage::reset_all();
+        match &r {
+            Ok(()) => st.log("info", "Смещения напряжения сняты"),
+            Err(e) => st.log("error", format!("Не удалось снять смещения напряжения: {e}")),
+        }
+        r
     })
     .await
     .map_err(err)?
@@ -1606,6 +1645,9 @@ pub fn run() {
             bios_advice,
             health_check,
             health_advice,
+            voltage_state,
+            voltage_set_offset,
+            voltage_reset,
             fans_state,
             fans_set_limits,
             fans_set_zero,

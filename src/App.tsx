@@ -14,12 +14,13 @@ import Audio from "./pages/Audio";
 import Access from "./pages/Access";
 import Processes from "./pages/Processes";
 import Impact from "./pages/Impact";
+import Experiments from "./pages/Experiments";
 import Settings from "./pages/Settings";
 import { X, Copy, ChevronDown, ChevronUp } from "lucide-react";
 
 /// Порядок должен совпадать с порядком пунктов в сайдбаре: Ctrl+1…9 и Ctrl+0
 /// выбирают страницу по этому списку, и рассинхрон превратит подсказки в ложь.
-export const PAGES: Page[] = ["dashboard", "health", "cpu", "gpu", "fans", "network", "audio", "processes", "profiles", "ai", "impact", "access", "settings"];
+export const PAGES: Page[] = ["dashboard", "health", "cpu", "gpu", "fans", "network", "audio", "processes", "profiles", "ai", "impact", "experiments", "access", "settings"];
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
   state = { error: null as string | null };
@@ -96,6 +97,7 @@ export default function App() {
             {page === "audio" && <Audio />}
             {page === "processes" && <Processes />}
             {page === "impact" && <Impact />}
+            {page === "experiments" && <Experiments />}
             {page === "profiles" && <Profiles />}
             {page === "cpu" && <Cpu />}
             {page === "gpu" && <Gpu />}

@@ -13,13 +13,14 @@ import {
   KeyRound,
   Settings,
   Stethoscope,
+  FlaskConical,
   ShieldCheck,
   ShieldAlert,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { Tip } from "./ui";
 
-type Item = { id: Page; label: string; icon: ReactNode; soon?: boolean; hint: string };
+type Item = { id: Page; label: string; icon: ReactNode; soon?: boolean; badge?: string; hint: string };
 
 /// Пункты сгруппированы по смыслу: железо отдельно от системных настроек,
 /// инструменты — в конце. Порядок внутри групп задаёт и номера горячих клавиш,
@@ -54,6 +55,7 @@ const groups: { title: string; items: Item[] }[] = [
     items: [
       { id: "ai", label: "Диагностика Claude", icon: <Sparkles size={17} />, hint: "Отправить снимок сети Claude и получить план действий." },
       { id: "impact", label: "Влияние", icon: <Gauge size={17} />, hint: "Тест: сколько CPU и памяти отнимает сам DotPilot в простое, при работе и в трее." },
+      { id: "experiments", label: "Эксперименты", icon: <FlaskConical size={17} />, badge: "бета", hint: "Смещение напряжения процессора через ACPI-интерфейс платы. Работает, но проверено меньше остального." },
       { id: "access", label: "Доступ", icon: <KeyRound size={17} />, hint: "Разрешения Windows и зависимости, которые приложение выдаёт себе само." },
       { id: "settings", label: "Настройки", icon: <Settings size={17} />, hint: "Пути к программам, API-ключ, цели пинга." },
     ],
@@ -104,6 +106,7 @@ export default function Sidebar() {
                     <span className={page === it.id ? "text-teal" : ""}>{it.icon}</span>
                     <span className="flex-1">{it.label}</span>
                     {it.soon && <span className="tag bg-line text-ink-3">скоро</span>}
+                    {it.badge && <span className="tag bg-line text-amber">{it.badge}</span>}
                   </button>
                 </Tip>
               );

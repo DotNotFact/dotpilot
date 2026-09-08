@@ -621,7 +621,34 @@ export interface HealthReport {
   summary: string;
 }
 
+/** Регуляторы напряжения из ACPI-интерфейса платы. Экспериментально. */
+export interface VoltageItem {
+  id: number;
+  name: string;
+  current_mv: number;
+  default_mv: number;
+  firmware_min_mv: number;
+  firmware_max_mv: number;
+  step_mv: number;
+  is_offset: boolean;
+  adjustable: boolean;
+  allowed_min_mv: number;
+  allowed_max_mv: number;
+  note: string;
+}
+
+export interface VoltageState {
+  available: boolean;
+  interface_version: string | null;
+  items: VoltageItem[];
+  backend: string;
+  note: string;
+}
+
 export const api = {
+  voltageState: () => invoke<VoltageState>("voltage_state"),
+  voltageSetOffset: (id: number, millivolts: number) => invoke<number>("voltage_set_offset", { id, millivolts }),
+  voltageReset: () => invoke<void>("voltage_reset"),
   healthCheck: () => invoke<HealthReport>("health_check"),
   healthAdvice: (report: HealthReport) => invoke<string>("health_advice", { report }),
   fansState: () => invoke<FanControllerState>("fans_state"),
