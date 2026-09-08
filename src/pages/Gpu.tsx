@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AreaChart, Area, ResponsiveContainer, YAxis, XAxis, Tooltip, CartesianGrid } from "recharts";
 import { useStore } from "../store";
-import { Section, Tile, Tag, StatusPill, Bar, Label } from "../components/ui";
+import { Section, Tile, Tag, StatusPill, Bar, Label, Switch } from "../components/ui";
 import {
   timeHM,
   api,
@@ -12,6 +12,7 @@ import {
   type OcStage,
   type OcSuggestion,
   type StageVerdict,
+  type ProfileStore,
 } from "../lib/api";
 import { runGpuTest, type GpuTestProgress } from "../lib/gputest";
 
@@ -61,6 +62,9 @@ export default function Gpu() {
   const [progress, setProgress] = useState<GpuTestProgress | null>(null);
   const [auto, setAuto] = useState(false);
   const [suggestion, setSuggestion] = useState<OcSuggestion | null>(null);
+  const [profiles, setProfiles] = useState<ProfileStore | null>(null);
+  const [newName, setNewName] = useState("");
+  const cfg = useStore((s) => s.cfg);
   // Пик температуры набирается из общего опроса NVAPI, чтобы не дёргать драйвер отдельно.
   const testingRef = useRef(false);
   const peakRef = useRef<number | null>(null);
@@ -186,6 +190,7 @@ export default function Gpu() {
 
   useEffect(() => {
     api.gpuCapabilities().then(setCaps).catch(() => setCaps(null));
+    api.gpuProfiles().then(setProfiles).catch(() => setProfiles(null));
   }, []);
 
   // NVAPI опрашивается отдельно от общего снимка: вызовы дешёвые, но идут в драйвер.
@@ -579,6 +584,126 @@ export default function Gpu() {
               </div>
             </div>
           )}
+        </Section>
+      )}
+
+      {profiles && (
+        <Section
+          title="Профили по приложениям"
+          sub="Игре полезен андервольт с высоким бустом, рендеру — полный лимит. Профиль включается сам, когда запускается привязанное приложение."
+          right={
+            <div className="flex items-center gap-2">
+              <span className="text-[12px] text-ink-2">переключать автоматически</span>
+              <Switch
+                on={profiles.auto}
+                disabled={busy}
+                onChange={(v) => run(() => api.gpuProfileAuto(v).then(setProfiles))}
+              />
+            </div>
+          }
+        >
+          <div className="flex flex-col gap-2">
+            {profiles.profiles.map((p) => (
+              <div key={p.id} className="panel-2 px-3.5 py-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <StatusPill
+                      ok={p.verified}
+                      warn={!p.verified}
+                      text={p.verified ? "проверен" : "не проверен"}
+                    />
+                    <div className="min-w-0">
+                      <div className="text-[13px]">
+                        {p.name}
+                        {p.is_default && <span className="text-ink-3"> · по умолчанию</span>}
+                        {profiles.active === p.id && <Tag color="var(--color-teal)">активен</Tag>}
+                      </div>
+                      <div className="text-[11.5px] text-ink-2">
+                        ядро {p.candidate.core_offset_mhz > 0 ? "+" : ""}
+                        {p.candidate.core_offset_mhz} МГц · память {p.candidate.mem_offset_mhz > 0 ? "+" : ""}
+                        {p.candidate.mem_offset_mhz} МГц · мощность {p.candidate.power_percent.toFixed(0)} %
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex gap-2 shrink-0">
+                    <button className="btn" disabled={busy} onClick={() => run(() => api.gpuProfileApply(p.id))}>
+                      Применить
+                    </button>
+                    {!p.is_default && (
+                      <button className="btn" disabled={busy} onClick={() => run(() => api.gpuProfileRemove(p.id).then(setProfiles))}>
+                        Удалить
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {!p.is_default && cfg && (
+                  <div className="flex flex-wrap gap-2 mt-2.5">
+                    {cfg.apps.map((a) => {
+                      const bound = p.app_ids.includes(a.id);
+                      return (
+                        <button
+                          key={a.id}
+                          className="btn"
+                          disabled={busy}
+                          style={bound ? { borderColor: a.color, color: "var(--color-ink)" } : undefined}
+                          onClick={() =>
+                            run(() =>
+                              api
+                                .gpuProfileBind(p.id, bound ? p.app_ids.filter((x) => x !== a.id) : [...p.app_ids, a.id])
+                                .then(setProfiles),
+                            )
+                          }
+                        >
+                          {bound ? "✓ " : ""}
+                          {a.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <div className="flex items-end gap-2 mt-3">
+            <div className="flex-1">
+              <div className="eyebrow">Новый профиль из проверенной настройки</div>
+              <input
+                className="input w-full mt-1"
+                placeholder="Например: Игра"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+              />
+            </div>
+            <button
+              className="btn"
+              disabled={busy || !newName.trim()}
+              onClick={() =>
+                run(async () => {
+                  setProfiles(await api.gpuProfileCreate(newName, []));
+                  setNewName("");
+                })
+              }
+            >
+              Создать
+            </button>
+          </div>
+          <div className="text-[11.5px] text-ink-3 mt-1.5">
+            Профиль создаётся из последней настройки, прошедшей длинную ступень. Взять текущие значения с карты нельзя:
+            они могут оказаться серединой незаконченной проверки.
+          </div>
+
+          <div className="mt-3">
+            <Label
+              title="Почему автоматика применяет только проверенные профили"
+              text="Непроверенная настройка может уронить систему — и сделает это в момент запуска игры, то есть ровно тогда, когда это больнее всего. Такой профиль можно применить вручную и прогнать через проверку, но сам он не включится."
+              rec="Порядок профилей в списке задаёт приоритет: если запущены и игра, и рендер, побеждает тот, что выше."
+              warn="Пока идёт проверка другой настройки, переключение откладывается — иначе вердикт по ступени относился бы уже не к тому, что проверялось."
+            >
+              <span className="text-[12px] text-ink-2">Правила автопереключения</span>
+            </Label>
+          </div>
         </Section>
       )}
 

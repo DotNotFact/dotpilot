@@ -1,5 +1,6 @@
 mod ai;
 mod anticheat;
+mod appprofiles;
 mod audio;
 mod bench;
 mod config;
@@ -264,6 +265,60 @@ async fn oc_propose(state: State<'_, Shared>, note: String) -> Result<ocloop::Su
                 Err(err(e))
             }
         }
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Профили разгона по приложениям.
+#[tauri::command]
+fn gpu_profiles() -> appprofiles::ProfileStore {
+    appprofiles::load()
+}
+
+/// Создать профиль из проверенной настройки и привязать к приложениям.
+#[tauri::command]
+fn gpu_profile_create(state: State<'_, Shared>, name: String, app_ids: Vec<String>) -> Result<appprofiles::ProfileStore, String> {
+    let s = appprofiles::create_from_verified(&name, app_ids)?;
+    state.log("info", format!("Создан профиль видеокарты «{name}»"));
+    Ok(s)
+}
+
+#[tauri::command]
+fn gpu_profile_bind(id: String, app_ids: Vec<String>) -> Result<appprofiles::ProfileStore, String> {
+    appprofiles::bind(&id, app_ids)
+}
+
+#[tauri::command]
+fn gpu_profile_remove(id: String) -> Result<appprofiles::ProfileStore, String> {
+    appprofiles::remove(&id)
+}
+
+#[tauri::command]
+fn gpu_profile_auto(state: State<'_, Shared>, on: bool) -> Result<appprofiles::ProfileStore, String> {
+    let s = appprofiles::set_auto(on)?;
+    state.log(
+        "info",
+        if on {
+            "Автопереключение профилей видеокарты включено: применяются только проверенные"
+        } else {
+            "Автопереключение профилей видеокарты выключено"
+        },
+    );
+    Ok(s)
+}
+
+/// Применить профиль вручную.
+#[tauri::command]
+async fn gpu_profile_apply(state: State<'_, Shared>, id: String) -> Result<appprofiles::SwitchResult, String> {
+    let st = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let r = appprofiles::apply(&id);
+        match &r {
+            Ok(s) => st.log("info", format!("Профиль «{}» применён вручную", s.profile_name)),
+            Err(e) => st.log("error", format!("Профиль не применён: {e}")),
+        }
+        r
     })
     .await
     .map_err(err)?
@@ -843,6 +898,18 @@ fn collector(app: tauri::AppHandle, st: Shared) {
                 AppStatus { id: a.id.clone(), running: !procs.is_empty(), procs, in_happ_list: in_happ, qos_rules: rules }
             })
             .collect();
+
+        // Профиль разгона по запущенному приложению. Модуль сам решает, нужно ли
+        // что-то менять, и молчит, когда активный профиль уже верный.
+        {
+            let running_ids: Vec<String> = apps.iter().filter(|a| a.running).map(|a| a.id.clone()).collect();
+            if let Some(r) = appprofiles::maybe_switch(&running_ids) {
+                st.log(
+                    if r.applied { "info" } else { "warn" },
+                    format!("Профиль видеокарты «{}»: {}", r.profile_name, r.detail),
+                );
+            }
+        }
 
         // game mode
         let game_running: Vec<String> = cfg
@@ -1784,6 +1851,12 @@ pub fn run() {
             voltage_set_offset,
             voltage_reset,
             trends_report,
+            gpu_profiles,
+            gpu_profile_create,
+            gpu_profile_bind,
+            gpu_profile_remove,
+            gpu_profile_auto,
+            gpu_profile_apply,
             maintenance_state,
             maintenance_done,
             notify_test,

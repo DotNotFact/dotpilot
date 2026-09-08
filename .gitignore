@@ -13,5 +13,6 @@ DotPilot.oc.json
 DotPilot.baselines.json
 DotPilot.trends.json
 DotPilot.maintenance.json
+DotPilot.gpuprofiles.json
 *.json.tmp
 

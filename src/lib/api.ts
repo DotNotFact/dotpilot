@@ -722,7 +722,37 @@ export interface NotifyResult {
   detail: string;
 }
 
+/** Профили разгона по приложениям. */
+export interface AppProfile {
+  id: string;
+  name: string;
+  candidate: GpuCandidate;
+  /** Прошёл длинную ступень: только такие применяются автоматически. */
+  verified: boolean;
+  app_ids: string[];
+  is_default: boolean;
+}
+
+export interface ProfileStore {
+  profiles: AppProfile[];
+  active: string | null;
+  auto: boolean;
+}
+
+export interface SwitchResult {
+  profile_id: string;
+  profile_name: string;
+  applied: boolean;
+  detail: string;
+}
+
 export const api = {
+  gpuProfiles: () => invoke<ProfileStore>("gpu_profiles"),
+  gpuProfileCreate: (name: string, appIds: string[]) => invoke<ProfileStore>("gpu_profile_create", { name, appIds }),
+  gpuProfileBind: (id: string, appIds: string[]) => invoke<ProfileStore>("gpu_profile_bind", { id, appIds }),
+  gpuProfileRemove: (id: string) => invoke<ProfileStore>("gpu_profile_remove", { id }),
+  gpuProfileAuto: (on: boolean) => invoke<ProfileStore>("gpu_profile_auto", { on }),
+  gpuProfileApply: (id: string) => invoke<SwitchResult>("gpu_profile_apply", { id }),
   maintenanceState: () => invoke<MaintenanceTask[]>("maintenance_state"),
   maintenanceDone: (id: string) => invoke<MaintenanceTask[]>("maintenance_done", { id }),
   notifyTest: () => invoke<NotifyResult>("notify_test"),
