@@ -615,6 +615,35 @@ async fn fans_restore(state: State<'_, Shared>) -> Result<(), String> {
     .map_err(err)?
 }
 
+/// Читает настройки с фотографии экрана BIOS и сравнивает с ожидаемыми.
+#[tauri::command]
+async fn bios_photo(state: State<'_, Shared>, path: String, expectation: String) -> Result<ocloop::BiosPhotoResult, String> {
+    let st = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let cfg = st.cfg();
+        match ocloop::read_bios_photo(&cfg, &path, &expectation) {
+            Ok(r) => {
+                st.log(
+                    "info",
+                    format!(
+                        "Снимок BIOS разобран: прочитано настроек {}, отправлено {} ({} КБ)",
+                        r.reading.settings.len(),
+                        r.sent_pixels,
+                        r.sent_kb
+                    ),
+                );
+                Ok(r)
+            }
+            Err(e) => {
+                st.log("error", format!("Не удалось разобрать снимок BIOS: {e}"));
+                Err(err(e))
+            }
+        }
+    })
+    .await
+    .map_err(err)?
+}
+
 /// План правок BIOS от Claude на основе снятых замеров.
 #[tauri::command]
 async fn bios_advice(state: State<'_, Shared>, question: String) -> Result<ocloop::BiosSuggestion, String> {
@@ -1886,6 +1915,7 @@ pub fn run() {
             platform_measure,
             platform_baselines,
             bios_advice,
+            bios_photo,
             health_check,
             health_advice,
             voltage_state,

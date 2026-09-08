@@ -758,7 +758,31 @@ export interface NoiseBudget {
   last_change: number | null;
 }
 
+/** Чтение экрана BIOS с фотографии. */
+export interface SeenSetting {
+  name: string;
+  value: string;
+}
+
+export interface BiosReading {
+  settings: SeenSetting[];
+  /** Удалось ли разобрать снимок вообще. */
+  readable: boolean;
+  problems: string[];
+  verdict: string;
+}
+
+export interface BiosPhotoResult {
+  reading: BiosReading;
+  sent_pixels: string;
+  sent_kb: number;
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+}
+
 export const api = {
+  biosPhoto: (path: string, expectation: string) => invoke<BiosPhotoResult>("bios_photo", { path, expectation }),
   noiseState: () => invoke<NoiseBudget>("noise_state"),
   noiseEnable: (on: boolean) => invoke<NoiseBudget>("noise_enable", { on }),
   noiseUpdate: (maxFan: number, targetTemp: number, floor: number, ceiling: number) =>

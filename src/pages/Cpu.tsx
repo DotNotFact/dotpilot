@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { AreaChart, Area, ResponsiveContainer, YAxis, XAxis, Tooltip, CartesianGrid } from "recharts";
 import { useStore } from "../store";
 import { Section, Tile, Bar, Tag, StatusPill } from "../components/ui";
@@ -10,6 +11,7 @@ import {
   type Baseline,
   type Comparison,
   type BiosSuggestion,
+  type BiosPhotoResult,
 } from "../lib/api";
 
 const history: { t: number; cpu: number; mem: number }[] = [];
@@ -22,6 +24,31 @@ export default function Cpu() {
   const [baselines, setBaselines] = useState<Baseline[]>([]);
   const [cmp, setCmp] = useState<Comparison | null>(null);
   const [bios, setBios] = useState<BiosSuggestion | null>(null);
+  const [photo, setPhoto] = useState<BiosPhotoResult | null>(null);
+
+  /**
+   * Снимок экрана BIOS сверяется с последним советом: так замыкается петля
+   * «модель предложила значения — вы ввели их — приложение подтвердило».
+   */
+  const checkPhoto = async () => {
+    const file = await open({
+      filters: [{ name: "Фотография", extensions: ["jpg", "jpeg", "png"] }],
+      multiple: false,
+    });
+    if (!file || typeof file !== "string") return;
+    setBusy("Читаю снимок…");
+    setPlErr(null);
+    try {
+      const expectation = bios
+        ? bios.advice.settings.map((s) => `${s.path} = ${s.value}`).join("\n")
+        : "";
+      setPhoto(await api.biosPhoto(file, expectation));
+    } catch (e) {
+      setPlErr(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
   const [busy, setBusy] = useState<string | null>(null);
   const [plErr, setPlErr] = useState<string | null>(null);
 
@@ -162,6 +189,9 @@ export default function Cpu() {
           <button className="btn" disabled={!!busy || baselines.length === 0} onClick={askBios}>
             Спросить Claude, что менять
           </button>
+          <button className="btn" disabled={!!busy} onClick={checkPhoto}>
+            Проверить по фото BIOS
+          </button>
           {busy && <span className="text-[12px] text-ink-2">{busy}</span>}
         </div>
         {plErr && <div className="text-[12.5px] text-coral mt-2">{plErr}</div>}
@@ -209,6 +239,54 @@ export default function Cpu() {
               />
             </div>
             <div className="text-[12px] text-ink-2 mt-2">{cmp.summary}</div>
+          </div>
+        )}
+
+        {photo && (
+          <div className="panel-2 px-3.5 py-3 mt-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-[13px]">Прочитано с фотографии экрана</div>
+              <div className="flex items-center gap-1.5">
+                {photo.reading.readable ? (
+                  <Tag color="var(--color-mint)">снимок разобран</Tag>
+                ) : (
+                  <Tag color="var(--color-coral)">снимок не читается</Tag>
+                )}
+                <Tag>
+                  {photo.sent_pixels} · {photo.sent_kb} КБ
+                </Tag>
+              </div>
+            </div>
+
+            {photo.reading.settings.length > 0 && (
+              <table className="w-full text-[12.5px] mt-2">
+                <tbody>
+                  {photo.reading.settings.map((s, i) => (
+                    <tr key={i}>
+                      <td className="py-0.5 text-ink-2">{s.name}</td>
+                      <td className="py-0.5 num text-right">{s.value}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+
+            <div className="text-[12px] text-ink-2 mt-2">{photo.reading.verdict}</div>
+
+            {photo.reading.problems.length > 0 && (
+              <div className="text-[11.5px] text-amber mt-1.5">
+                Не удалось прочитать: {photo.reading.problems.join("; ")}
+              </div>
+            )}
+
+            <div className="text-[11.5px] text-ink-3 mt-2">
+              Значения, которые не читаются на снимке, в таблицу не попадают: выдуманное значение здесь хуже, чем
+              признание «не видно». Фото уменьшается до 1600 пикселей перед отправкой — для чтения строк меню этого
+              достаточно, а снимок с телефона иначе не уложился бы в ограничение API.
+            </div>
+            <div className="text-[11.5px] text-ink-3 mt-1">
+              {photo.model} · {photo.input_tokens} вход / {photo.output_tokens} выход
+            </div>
           </div>
         )}
 
