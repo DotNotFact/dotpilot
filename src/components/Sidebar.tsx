@@ -18,20 +18,48 @@ import {
 import type { ReactNode } from "react";
 import { Tip } from "./ui";
 
-const items: { id: Page; label: string; icon: ReactNode; soon?: boolean; hint: string }[] = [
-  { id: "dashboard", label: "Главная", icon: <LayoutDashboard size={17} />, hint: "Состояние сети и ПК одним взглядом: пинг, потери, Wi-Fi, карта маршрутов, экспорт данных." },
-  { id: "network", label: "Сеть", icon: <Network size={17} />, hint: "Кто через какой канал выходит в сеть: политики приложений, QoS, службы Happ / zapret / Radmin, адаптеры, твики." },
-  { id: "audio", label: "Звук", icon: <Headphones size={17} />, hint: "Наушники: профили Bluetooth, устройство по умолчанию, эквалайзер для шагов." },
-  { id: "processes", label: "Процессы", icon: <Activity size={17} />, hint: "Диспетчер: кто грузит CPU, память и видеокарту; подозрительные процессы; завершение." },
-  { id: "impact", label: "Влияние", icon: <Gauge size={17} />, hint: "Тест: сколько CPU и памяти отнимает сам DotPilot в простое, при работе и в трее." },
-  { id: "profiles", label: "Профили", icon: <SlidersHorizontal size={17} />, hint: "Готовые режимы ПК: Стандарт, Игра, Работа, Экономия. Схема питания + сеть + службы." },
-  { id: "cpu", label: "Процессор", icon: <Cpu size={17} />, hint: "Загрузка по потокам, частота, память." },
-  { id: "gpu", label: "Видеокарта", icon: <MonitorCog size={17} />, hint: "Температура, мощность, частоты и память NVIDIA." },
-  { id: "fans", label: "Вентиляторы", icon: <Fan size={17} />, hint: "Вентиляторы платы через ACPI-интерфейс: датчики, пороги остановки, привязка к датчику." },
-  { id: "ai", label: "Диагностика Claude", icon: <Sparkles size={17} />, hint: "Отправить снимок сети Claude и получить план действий." },
-  { id: "access", label: "Доступ", icon: <KeyRound size={17} />, hint: "Разрешения Windows и зависимости, которые приложение выдаёт себе само." },
-  { id: "settings", label: "Настройки", icon: <Settings size={17} />, hint: "Пути к программам, API-ключ, цели пинга." },
+type Item = { id: Page; label: string; icon: ReactNode; soon?: boolean; hint: string };
+
+/// Пункты сгруппированы по смыслу: железо отдельно от системных настроек,
+/// инструменты — в конце. Порядок внутри групп задаёт и номера горячих клавиш,
+/// поэтому он обязан совпадать с массивом PAGES в App.tsx.
+const groups: { title: string; items: Item[] }[] = [
+  {
+    title: "Обзор",
+    items: [
+      { id: "dashboard", label: "Главная", icon: <LayoutDashboard size={17} />, hint: "Состояние сети и ПК одним взглядом: пинг, потери, Wi-Fi, карта маршрутов, экспорт данных." },
+    ],
+  },
+  {
+    title: "Железо",
+    items: [
+      { id: "cpu", label: "Процессор", icon: <Cpu size={17} />, hint: "Загрузка по потокам, частота, замеры до и после правок BIOS, советы по EXPO и Curve Optimizer." },
+      { id: "gpu", label: "Видеокарта", icon: <MonitorCog size={17} />, hint: "Температура, мощность, частоты, смещения и подбор разгона с откатом." },
+      { id: "fans", label: "Вентиляторы", icon: <Fan size={17} />, hint: "Вентиляторы платы через ACPI-интерфейс: датчики, пороги остановки, привязка к датчику." },
+    ],
+  },
+  {
+    title: "Система",
+    items: [
+      { id: "network", label: "Сеть", icon: <Network size={17} />, hint: "Кто через какой канал выходит в сеть: политики приложений, QoS, службы Happ / zapret / Radmin, адаптеры, твики." },
+      { id: "audio", label: "Звук", icon: <Headphones size={17} />, hint: "Наушники: профили Bluetooth, устройство по умолчанию, эквалайзер для шагов." },
+      { id: "processes", label: "Процессы", icon: <Activity size={17} />, hint: "Диспетчер: кто грузит CPU, память и видеокарту; подозрительные процессы; завершение." },
+      { id: "profiles", label: "Профили", icon: <SlidersHorizontal size={17} />, hint: "Готовые режимы ПК: Стандарт, Игра, Работа, Экономия. Схема питания + сеть + службы." },
+    ],
+  },
+  {
+    title: "Инструменты",
+    items: [
+      { id: "ai", label: "Диагностика Claude", icon: <Sparkles size={17} />, hint: "Отправить снимок сети Claude и получить план действий." },
+      { id: "impact", label: "Влияние", icon: <Gauge size={17} />, hint: "Тест: сколько CPU и памяти отнимает сам DotPilot в простое, при работе и в трее." },
+      { id: "access", label: "Доступ", icon: <KeyRound size={17} />, hint: "Разрешения Windows и зависимости, которые приложение выдаёт себе само." },
+      { id: "settings", label: "Настройки", icon: <Settings size={17} />, hint: "Пути к программам, API-ключ, цели пинга." },
+    ],
+  },
 ];
+
+/// Плоский список в том же порядке — по нему считаются номера горячих клавиш.
+const items: Item[] = groups.flatMap((g) => g.items);
 
 export default function Sidebar() {
   const page = useStore((s) => s.page);
@@ -56,20 +84,29 @@ export default function Sidebar() {
         </div>
       </div>
 
-      <nav className="px-3 flex flex-col gap-0.5">
-        {items.map((it, idx) => (
-          <Tip key={it.id} title={idx < 10 ? `${it.label} · Ctrl+${(idx + 1) % 10}` : it.label} text={it.hint} className="w-full">
-            <button
-              onClick={() => setPage(it.id)}
-              className={`w-full flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] text-left cursor-pointer transition-colors ${
-                page === it.id ? "bg-panel-2 text-ink border border-line-2" : "text-ink-2 hover:text-ink hover:bg-panel-2/60 border border-transparent"
-              }`}
-            >
-              <span className={page === it.id ? "text-teal" : ""}>{it.icon}</span>
-              <span className="flex-1">{it.label}</span>
-              {it.soon && <span className="tag bg-line text-ink-3">скоро</span>}
-            </button>
-          </Tip>
+      <nav className="px-3 flex flex-col gap-3 overflow-y-auto">
+        {groups.map((group) => (
+          <div key={group.title} className="flex flex-col gap-0.5">
+            <div className="eyebrow px-2.5 pb-1">{group.title}</div>
+            {group.items.map((it) => {
+              // Номер горячей клавиши берётся из общего порядка, а не из порядка внутри группы.
+              const idx = items.indexOf(it);
+              return (
+                <Tip key={it.id} title={idx < 10 ? `${it.label} · Ctrl+${(idx + 1) % 10}` : it.label} text={it.hint} className="w-full">
+                  <button
+                    onClick={() => setPage(it.id)}
+                    className={`w-full flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] text-left cursor-pointer transition-colors ${
+                      page === it.id ? "bg-panel-2 text-ink border border-line-2" : "text-ink-2 hover:text-ink hover:bg-panel-2/60 border border-transparent"
+                    }`}
+                  >
+                    <span className={page === it.id ? "text-teal" : ""}>{it.icon}</span>
+                    <span className="flex-1">{it.label}</span>
+                    {it.soon && <span className="tag bg-line text-ink-3">скоро</span>}
+                  </button>
+                </Tip>
+              );
+            })}
+          </div>
         ))}
       </nav>
 

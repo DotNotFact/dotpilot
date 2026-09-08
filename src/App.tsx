@@ -16,7 +16,9 @@ import Impact from "./pages/Impact";
 import Settings from "./pages/Settings";
 import { X, Copy, ChevronDown, ChevronUp } from "lucide-react";
 
-export const PAGES: Page[] = ["dashboard", "network", "audio", "processes", "impact", "profiles", "cpu", "gpu", "fans", "ai", "access", "settings"];
+/// Порядок должен совпадать с порядком пунктов в сайдбаре: Ctrl+1…9 и Ctrl+0
+/// выбирают страницу по этому списку, и рассинхрон превратит подсказки в ложь.
+export const PAGES: Page[] = ["dashboard", "cpu", "gpu", "fans", "network", "audio", "processes", "profiles", "ai", "impact", "access", "settings"];
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
   state = { error: null as string | null };
