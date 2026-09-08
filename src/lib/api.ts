@@ -672,7 +672,32 @@ export interface TrendReport {
   energy: EnergyReport;
 }
 
+/** Сосуществование с античитами: что приложение делает и блокируется ли запись. */
+export interface DetectedAntiCheat {
+  process: string;
+  product: string;
+  pid: number;
+}
+
+export interface Activity {
+  what: string;
+  how: string;
+  /** ordinary — как обычные приложения, notable — заметно, paused — приостановлено. */
+  kind: "ordinary" | "notable" | "paused" | string;
+  detail: string;
+}
+
+export interface AntiCheatStatus {
+  safe_mode: boolean;
+  detected: DetectedAntiCheat[];
+  writes_blocked: boolean;
+  activities: Activity[];
+  note: string;
+}
+
 export const api = {
+  anticheatStatus: () => invoke<AntiCheatStatus>("anticheat_status"),
+  anticheatSetMode: (on: boolean) => invoke<void>("anticheat_set_mode", { on }),
   trendsReport: () => invoke<TrendReport>("trends_report"),
   voltageState: () => invoke<VoltageState>("voltage_state"),
   voltageSetOffset: (id: number, millivolts: number) => invoke<number>("voltage_set_offset", { id, millivolts }),

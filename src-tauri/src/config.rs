@@ -73,6 +73,9 @@ pub struct Config {
     pub ai_proxy: String,
     pub ai_effort: String,
     pub poll_ms: u64,
+    /// Приостанавливать запись в железо, пока работает античит.
+    #[serde(default)]
+    pub anticheat_safe_mode: bool,
     /// Цена киловатт-часа для подсчёта стоимости потреблённой энергии.
     #[serde(default = "default_tariff")]
     pub power_tariff: f64,
@@ -196,6 +199,7 @@ impl Default for Config {
             ai_effort: "medium".into(),
             poll_ms: 3000,
             power_tariff: default_tariff(),
+            anticheat_safe_mode: false,
             tg_exe: "D:\\Application\\Telegram Desktop\\Telegram.exe".into(),
             tgws_exe: "D:\\DotNotFact\\Desktop\\TgWsProxy_windows.exe".into(),
             tgws_autostart: false,

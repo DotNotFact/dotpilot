@@ -1,4 +1,5 @@
 mod ai;
+mod anticheat;
 mod audio;
 mod bench;
 mod config;
@@ -183,6 +184,9 @@ fn oc_apply(
     candidate: ocsafe::GpuCandidate,
     stage: ocsafe::Stage,
 ) -> Result<ocsafe::ApplyReport, String> {
+    if let Some(reason) = anticheat::writes_blocked() {
+        return Err(reason);
+    }
     let r = ocsafe::apply(candidate, stage);
     match &r {
         Ok(rep) => state.log("info", format!("Разгон применён: {}", rep.message)),
@@ -261,6 +265,31 @@ async fn oc_propose(state: State<'_, Shared>, note: String) -> Result<ocloop::Su
     .map_err(err)?
 }
 
+/// Что приложение делает с системой и работает ли сейчас античит.
+#[tauri::command]
+async fn anticheat_status() -> Result<anticheat::AntiCheatStatus, String> {
+    tauri::async_runtime::spawn_blocking(anticheat::status).await.map_err(err)
+}
+
+/// Включить или выключить режим сосуществования с античитом.
+#[tauri::command]
+fn anticheat_set_mode(state: State<'_, Shared>, on: bool) -> Result<(), String> {
+    anticheat::set_safe_mode(on);
+    let mut cfg = state.cfg();
+    cfg.anticheat_safe_mode = on;
+    config::save(&cfg).map_err(err)?;
+    *state.cfg.lock().unwrap() = cfg;
+    state.log(
+        "info",
+        if on {
+            "Режим сосуществования с античитом включён: запись в железо приостанавливается, пока античит работает"
+        } else {
+            "Режим сосуществования с античитом выключен"
+        },
+    );
+    Ok(())
+}
+
 /// Долгие наблюдения: деградация охлаждения и расход электричества.
 #[tauri::command]
 async fn trends_report(state: State<'_, Shared>) -> Result<trends::TrendReport, String> {
@@ -279,6 +308,9 @@ async fn voltage_state() -> Result<voltage::VoltageState, String> {
 /// Смещение напряжения. Возвращает фактически применённое значение после обрезки.
 #[tauri::command]
 async fn voltage_set_offset(state: State<'_, Shared>, id: i32, millivolts: i32) -> Result<i32, String> {
+    if let Some(reason) = anticheat::writes_blocked() {
+        return Err(reason);
+    }
     let st = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let r = voltage::set_offset(id, millivolts);
@@ -348,6 +380,9 @@ async fn fans_state() -> Result<fanctl::FanControllerState, String> {
 /// после обрезки пределами — они могут отличаться от запрошенных.
 #[tauri::command]
 async fn fans_set_limits(state: State<'_, Shared>, id: u8, off_c: u8, on_c: u8) -> Result<(u8, u8), String> {
+    if let Some(reason) = anticheat::writes_blocked() {
+        return Err(reason);
+    }
     let st = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let r = fanctl::set_temp_limits(id, off_c, on_c);
@@ -364,6 +399,9 @@ async fn fans_set_limits(state: State<'_, Shared>, id: u8, off_c: u8, on_c: u8) 
 /// Разрешить или запретить полную остановку вентилятора.
 #[tauri::command]
 async fn fans_set_zero(state: State<'_, Shared>, id: u8, enabled: bool) -> Result<(), String> {
+    if let Some(reason) = anticheat::writes_blocked() {
+        return Err(reason);
+    }
     let st = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let r = fanctl::set_zero_fan(id, enabled);
@@ -380,6 +418,9 @@ async fn fans_set_zero(state: State<'_, Shared>, id: u8, enabled: bool) -> Resul
 /// Привязать вентилятор к другому датчику температуры.
 #[tauri::command]
 async fn fans_set_sensor(state: State<'_, Shared>, id: u8, sensor: u8) -> Result<(), String> {
+    if let Some(reason) = anticheat::writes_blocked() {
+        return Err(reason);
+    }
     let st = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let r = fanctl::set_target_sensor(id, sensor);
@@ -395,6 +436,9 @@ async fn fans_set_sensor(state: State<'_, Shared>, id: u8, sensor: u8) -> Result
 /// Принудительно раскрутить вентилятор, отменив остановку.
 #[tauri::command]
 async fn fans_force_on(state: State<'_, Shared>, id: u8) -> Result<(), String> {
+    if let Some(reason) = anticheat::writes_blocked() {
+        return Err(reason);
+    }
     let st = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let r = fanctl::force_on(id);
@@ -562,7 +606,17 @@ fn collector(app: tauri::AppHandle, st: Shared) {
             let mem = sys.mem();
             let rates = sys.net_rates();
             let found = sys.find_apps(&cfg.apps);
-            let gui = sys.find_by_name(&["Happ.exe", "happd.exe", "xray.exe", "sing-box.exe", "winws.exe", "Radmin.exe", "RvRvpnGui.exe"]);
+            // Античиты ищутся тем же проходом по процессам, что и служебные приложения:
+            // отдельного обращения к системе ради этого не делается.
+            let ac_names = anticheat::process_names();
+            let mut watch: Vec<&str> = vec!["Happ.exe", "happd.exe", "xray.exe", "sing-box.exe", "winws.exe", "Radmin.exe", "RvRvpnGui.exe"];
+            watch.extend(ac_names.iter().map(|s| s.as_str()));
+            let all = sys.find_by_name(&watch);
+            anticheat::note_running_processes(&all.iter().map(|p| p.name.clone()).collect::<Vec<_>>());
+            let gui: Vec<sysmon::ProcInfo> = all
+                .into_iter()
+                .filter(|p| !ac_names.iter().any(|a| a.eq_ignore_ascii_case(&p.name)))
+                .collect();
             (cpu, mem, rates, found, gui)
         };
 
@@ -1580,6 +1634,10 @@ pub fn run() {
             let handle = app.handle().clone();
             tray::setup(&handle)?;
 
+            // Режим сосуществования восстанавливается до первого опроса, иначе
+            // между стартом и первым обращением к интерфейсу запись была бы разрешена.
+            anticheat::set_safe_mode(state.cfg().anticheat_safe_mode);
+
             // Проверка сбоя должна пройти до того, как что-либо снова применится
             // к карте: неподтверждённая запись в журнале означает прошлый вылет.
             let report = ocsafe::boot_check();
@@ -1662,6 +1720,8 @@ pub fn run() {
             voltage_set_offset,
             voltage_reset,
             trends_report,
+            anticheat_status,
+            anticheat_set_mode,
             fans_state,
             fans_set_limits,
             fans_set_zero,

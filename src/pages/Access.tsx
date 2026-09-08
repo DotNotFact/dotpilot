@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useStore } from "../store";
-import { api, type PermItem } from "../lib/api";
-import { Section, Tag, Tip, StatusPill } from "../components/ui";
+import { api, type PermItem, type AntiCheatStatus } from "../lib/api";
+import { Section, Tag, Tip, StatusPill, Switch } from "../components/ui";
 import { KeyRound, RefreshCw, ShieldCheck, Zap, Undo2 } from "lucide-react";
 
 export default function Access() {
@@ -10,9 +10,16 @@ export default function Access() {
   const [items, setItems] = useState<PermItem[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
+  const [ac, setAc] = useState<AntiCheatStatus | null>(null);
+
   const load = () => api.permsStatus().then(setItems).catch((e) => toast("error", String(e)));
+  const loadAc = () => api.anticheatStatus().then(setAc).catch(() => setAc(null));
   useEffect(() => {
     load();
+    loadAc();
+    // Античит может запуститься вместе с игрой уже после открытия страницы.
+    const t = setInterval(loadAc, 10000);
+    return () => clearInterval(t);
   }, []);
 
   const grant = async (it: PermItem, on: boolean) => {
@@ -113,6 +120,70 @@ export default function Access() {
         ))}
         {items === null && <div className="text-ink-3 text-[12.5px]">Проверяю состояние…</div>}
       </div>
+
+      {ac && (
+        <Section
+          title="Сосуществование с античитами"
+          sub="Полный список того, что приложение делает с системой, и оценка каждого пункта глазами защиты игры."
+          right={
+            <div className="flex items-center gap-2">
+              <span className="text-[12px] text-ink-2">приостанавливать запись</span>
+              <Switch
+                on={ac.safe_mode}
+                onChange={(v) =>
+                  api
+                    .anticheatSetMode(v)
+                    .then(() => {
+                      toast("success", v ? "Режим включён: пока античит работает, запись в железо запрещена" : "Режим выключен");
+                      loadAc();
+                    })
+                    .catch((e) => toast("error", String(e)))
+                }
+              />
+            </div>
+          }
+        >
+          <div className="panel-2 px-3.5 py-3">
+            <div className="flex items-center gap-2.5">
+              <StatusPill
+                ok={ac.detected.length === 0}
+                warn={ac.detected.length > 0 && !ac.writes_blocked}
+                text={ac.detected.length === 0 ? "античит не найден" : ac.writes_blocked ? "запись приостановлена" : "античит работает"}
+              />
+              <div className="text-[12.5px] text-ink-2">{ac.note}</div>
+            </div>
+            {ac.detected.length > 0 && (
+              <div className="text-[11.5px] text-ink-3 mt-1.5">
+                {ac.detected.map((d) => `${d.product} (${d.process}, pid ${d.pid})`).join(" · ")}
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-1.5 mt-3">
+            {ac.activities.map((a, i) => (
+              <div key={i} className="flex items-start gap-2.5 py-1">
+                <Tag
+                  color={a.kind === "paused" ? "var(--color-amber)" : a.kind === "notable" ? "var(--color-blue)" : "var(--color-mint)"}
+                >
+                  {a.kind === "paused" ? "приостановлено" : a.kind === "notable" ? "заметно" : "обычно"}
+                </Tag>
+                <div className="min-w-0">
+                  <div className="text-[13px]">{a.what}</div>
+                  <div className="text-[11.5px] text-ink-2">
+                    {a.how} · {a.detail}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="text-[11.5px] text-ink-3 mt-3">
+            Приложение не использует кернел-драйверов и не читает память чужих процессов. Когда режим включён и античит
+            работает, команды записи в железо возвращают отказ — это проверяется в самих командах, а не отображается
+            флажком.
+          </div>
+        </Section>
+      )}
 
       <Section title="Что уже сделано автоматически" sub="Без отдельных кнопок">
         <ul className="text-[12.5px] text-ink-2 list-disc ml-5 leading-relaxed">
